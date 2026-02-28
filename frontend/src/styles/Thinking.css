@@ -1,0 +1,89 @@
+
+.thinking-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: url("../assets/bg-image.jpg") center/cover no-repeat fixed;
+  position: relative;
+}
+
+
+.thinking-page::before {
+  content:"";
+  position:absolute;
+  inset:0;
+  background: linear-gradient(
+    to bottom,
+    rgba(2,6,23,0.55),
+    rgba(2,6,23,0.85)
+  );
+}
+
+.thinking-page::after {
+  content:"";
+  position:absolute;
+  inset:0;
+  background:
+    radial-gradient(circle at 25% 35%, rgba(59,130,246,.35), transparent 45%),
+    radial-gradient(circle at 80% 70%, rgba(168,85,247,.35), transparent 50%);
+}
+
+
+
+.thinking-box {
+  position:relative;
+  z-index:2;
+  padding:60px 80px;
+  border-radius:28px;
+
+  background: linear-gradient(
+    160deg,
+    rgba(15,23,42,.85),
+    rgba(30,41,59,.65)
+  );
+
+  border:1px solid rgba(147,197,253,.4);
+  backdrop-filter: blur(20px);
+
+  box-shadow:
+    inset 0 0 35px rgba(99,102,241,.3),
+    0 0 60px rgba(99,102,241,.35);
+
+  text-align:center;
+}
+
+
+
+.thinking-box h2 {
+  margin-top:25px;
+  font-size:26px;
+  font-weight:600;
+  color:#e0e7ff;
+  animation: fadeText 1s ease;
+}
+
+
+
+.spinner {
+  width:70px;
+  height:70px;
+  border-radius:50%;
+  border:4px solid rgba(255,255,255,.2);
+  border-top:4px solid #60a5fa;
+  animation: spin 1s linear infinite;
+  margin:0 auto;
+  box-shadow:0 0 30px rgba(96,165,250,.6);
+}
+
+
+
+@keyframes spin {
+  0% { transform:rotate(0deg); }
+  100% { transform:rotate(360deg); }
+}
+
+@keyframes fadeText {
+  from { opacity:0; transform:translateY(10px); }
+  to { opacity:1; transform:translateY(0); }
+}

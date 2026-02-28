@@ -1,0 +1,45 @@
+.live-preview{
+  grid-column:1/4;
+  border-top:1px solid rgba(99,102,241,.25);
+  background:#020617;
+  display:flex;
+  flex-direction:column;
+  height:260px;
+}
+
+.live-header{
+  padding:10px 14px;
+  border-bottom:1px solid rgba(99,102,241,.25);
+  display:flex;
+  gap:10px;
+  align-items:center;
+}
+
+.live-header button{
+  background:#6366f1;
+  border:none;
+  padding:6px 12px;
+  border-radius:8px;
+  color:white;
+  cursor:pointer;
+}
+
+.live-body{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  height:100%;
+}
+
+.live-body iframe{
+  width:100%;
+  height:100%;
+  border:none;
+  background:white;
+}
+
+.live-console{
+  padding:10px;
+  font-family:monospace;
+  overflow:auto;
+  color:#e5e7eb;
+}
