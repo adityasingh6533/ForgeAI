@@ -1,1 +1,76 @@
- 
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Counter Ping Spinning Jet</title>
+    <style>
+      :root {
+        color-scheme: light;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        background: linear-gradient(120deg, #dff6ff, #f8fbff);
+      }
+
+      .card {
+        width: min(90vw, 420px);
+        padding: 24px;
+        border-radius: 16px;
+        background: #ffffff;
+        box-shadow: 0 12px 30px rgba(18, 59, 92, 0.15);
+        text-align: center;
+      }
+
+      h1 {
+        margin: 0 0 16px;
+        font-size: 1.4rem;
+        color: #123b5c;
+      }
+
+      #count {
+        margin: 12px 0 20px;
+        font-size: 3rem;
+        font-weight: 700;
+        color: #0f62a5;
+      }
+
+      button {
+        border: 0;
+        border-radius: 10px;
+        padding: 10px 16px;
+        font-size: 1rem;
+        cursor: pointer;
+        background: #0f62a5;
+        color: #fff;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <h1>Counter Ping Spinning Jet</h1>
+      <p id="count">0</p>
+      <button id="increment-btn" type="button">Increment</button>
+    </main>
+
+    <script>
+      const countNode = document.getElementById("count");
+      const button = document.getElementById("increment-btn");
+      let count = 0;
+
+      button.addEventListener("click", () => {
+        count += 1;
+        countNode.textContent = String(count);
+      });
+    </script>
+  </body>
+</html>
