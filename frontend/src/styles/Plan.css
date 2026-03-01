@@ -15,39 +15,69 @@
 .plan-container {
   position: relative;
   z-index: 1;
-  max-width: 1200px;
+  max-width: 1340px;
   margin: 0 auto;
 }
 
 .plan-header {
   text-align: center;
-  margin-bottom: 36px;
+  margin-bottom: 24px;
+  display: grid;
+  gap: 12px;
+  justify-items: center;
 }
 
 .plan-header h1 {
   margin: 0;
-  font-size: clamp(28px, 5vw, 46px);
-  color: #e2e8f0;
+  font-size: clamp(24px, 3.2vw, 36px);
+  color: #dbeafe;
+  letter-spacing: 0.4px;
 }
 
 .plan-header p {
-  margin: 10px 0 0;
+  margin: 0;
   color: #cbd5e1;
+}
+
+.plan-title-card {
+  width: min(1120px, 100%);
+  max-height: 190px;
+  overflow: auto;
+  padding: 16px 20px;
+  border-radius: 18px;
+  text-align: left;
+  border: 1px solid rgba(96, 165, 250, 0.36);
+  background:
+    linear-gradient(180deg, rgba(15, 23, 42, 0.94), rgba(2, 6, 23, 0.9));
+  box-shadow:
+    inset 0 0 0 1px rgba(148, 163, 184, 0.1),
+    0 18px 42px rgba(2, 6, 23, 0.45);
+}
+
+.plan-title-card p {
+  margin: 0;
+  font-size: clamp(18px, 2.2vw, 26px);
+  line-height: 1.45;
+  color: #e2e8f0;
+  font-weight: 700;
 }
 
 .plan-split {
   display: grid;
-  grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1.75fr) minmax(0, 1fr);
   gap: 22px;
   align-items: stretch;
 }
 
 .mindmap {
-  min-height: 620px;
-  border-radius: 16px;
-  border: 1px solid rgba(148, 163, 184, 0.25);
-  background: rgba(15, 23, 42, 0.82);
-  box-shadow: 0 8px 20px rgba(2, 6, 23, 0.35);
+  min-height: 700px;
+  border-radius: 20px;
+  border: 1px solid rgba(96, 165, 250, 0.3);
+  background:
+    radial-gradient(circle at 10% 20%, rgba(56, 189, 248, 0.13), transparent 40%),
+    radial-gradient(circle at 90% 80%, rgba(16, 185, 129, 0.1), transparent 45%),
+    rgba(2, 6, 23, 0.92);
+  box-shadow: 0 22px 56px rgba(2, 6, 23, 0.52);
   overflow: hidden;
 }
 
@@ -57,14 +87,16 @@
 }
 
 .idea-brief {
-  border-radius: 16px;
-  border: 1px solid rgba(148, 163, 184, 0.25);
-  background: rgba(15, 23, 42, 0.82);
-  box-shadow: 0 8px 20px rgba(2, 6, 23, 0.35);
+  border-radius: 20px;
+  border: 1px solid rgba(96, 165, 250, 0.3);
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.88), rgba(2, 6, 23, 0.85));
+  box-shadow: 0 20px 48px rgba(2, 6, 23, 0.45);
   padding: 24px;
   color: #cbd5e1;
   display: flex;
   flex-direction: column;
+  max-height: 700px;
+  overflow: auto;
 }
 
 .idea-brief h3,
@@ -75,7 +107,7 @@
 
 .idea-brief p {
   margin: 0 0 24px;
-  line-height: 1.6;
+  line-height: 1.7;
 }
 
 .idea-brief ol {
@@ -85,7 +117,7 @@
 }
 
 .start-btn {
-  margin-top: auto;
+  margin-top: 20px;
   align-self: center;
   padding: 14px 26px;
   border: none;
@@ -113,7 +145,11 @@
   }
 
   .mindmap {
-    min-height: 460px;
+    min-height: 520px;
+  }
+
+  .plan-title-card {
+    max-height: 160px;
   }
 }
 @keyframes flow{
@@ -122,22 +158,25 @@
 }
 
 .mind-node{
-  padding:10px 18px;
-  border-radius:12px;
-  background:rgba(20,30,60,.8);
-  border:1px solid #3b82f6;
-  color:white;
+  padding:12px 16px;
+  border-radius:14px;
+  background:linear-gradient(180deg, rgba(30, 58, 138, 0.36), rgba(30, 41, 59, 0.9));
+  border:1px solid rgba(96, 165, 250, 0.62);
+  color:#eff6ff;
   text-align:center;
-  line-height:1.35;
+  line-height:1.45;
+  font-size: 13px;
+  font-weight: 600;
   white-space:normal;
   overflow-wrap:anywhere;
-  transition:.25s;
+  transition:.2s ease;
+  box-shadow: 0 10px 26px rgba(2, 6, 23, 0.42);
 }
 
 .mind-node:hover{
-  transform:scale(1.08);
-  box-shadow:0 0 18px #4f9cff;
-  background:rgba(40,80,140,.9);
+  transform:translateY(-2px) scale(1.02);
+  box-shadow:0 0 18px rgba(96, 165, 250, 0.45);
+  background:linear-gradient(180deg, rgba(37, 99, 235, 0.34), rgba(30, 58, 138, 0.88));
 }
 
 .mind-node.active{

@@ -2,7 +2,28 @@
 
 .board-page::before{ content:""; position:absolute; inset:0; background: radial-gradient(circle at 20% 10%,rgba(59,130,246,.12),transparent 40%), radial-gradient(circle at 80% 70%,rgba(168,85,247,.12),transparent 40%), linear-gradient(rgba(2,6,23,.92),rgba(2,6,23,.98)); }
 
-.board-header{position:relative;z-index:2;margin-bottom:20px} .board-header h1{ font-size:32px; font-weight:700; background:linear-gradient(90deg,#e0f2fe,#c7d2fe,#e9d5ff); -webkit-background-clip:text; -webkit-text-fill-color:transparent; }
+.board-header{position:relative;z-index:2;margin-bottom:20px;display:flex;flex-direction:column;gap:10px}
+.board-idea-card{
+  max-height: 168px;
+  overflow:auto;
+  padding:14px 16px;
+  border-radius:16px;
+  border:1px solid rgba(99,102,241,.35);
+  background:linear-gradient(180deg,rgba(15,23,42,.94),rgba(2,6,23,.9));
+  box-shadow:inset 0 0 0 1px rgba(148,163,184,.12), 0 14px 34px rgba(0,0,0,.45);
+}
+.board-header h1{
+  margin:0;
+  font-size:clamp(20px,2.4vw,30px);
+  line-height:1.45;
+  font-weight:700;
+  color:#e2e8f0;
+  text-align:left;
+}
+.board-header p{
+  margin:0;
+  color:#c7d2fe;
+}
 
 .workspace-bar{ position:relative; z-index:2; margin-bottom:16px; padding:10px 16px; background:rgba(15,23,42,.8); border:1px solid rgba(99,102,241,.25); border-radius:14px; font-size:13px; color:#c7d2fe; backdrop-filter:blur(8px); }
 
@@ -26,18 +47,24 @@
 
 .guide-left{border-right:1px solid rgba(99,102,241,.25);padding:20px;overflow:auto} .guide-left p{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.6} .path{margin-top:14px;padding:10px 12px;background:rgba(99,102,241,.1);border-radius:10px;font-size:13px;color:#c7d2fe}
 
-.guide-editor{display:flex;flex-direction:column;background:#020617;min-width:0} .code-label{padding:10px 14px;border-bottom:1px solid rgba(99,102,241,.25);color:#a5b4fc;font-size:13px} .guide-editor textarea{ flex:1;border:none;outline:none;padding:18px;font-size:13.5px;background:#020617;color:#e5e7eb; font-family:monospace;line-height:1.6;overflow:auto;white-space:pre;min-width:0 }
+.guide-editor{display:flex;flex-direction:column;background:#020617;min-width:0} .code-label{position:relative;padding:10px 14px;border-bottom:1px solid rgba(99,102,241,.25);color:#a5b4fc;font-size:13px;padding-right:124px} .guide-editor textarea{ flex:1;border:none;outline:none;padding:18px;font-size:13.5px;background:#020617;color:#e5e7eb; font-family:monospace;line-height:1.6;overflow:auto;white-space:pre;min-width:0 }
 
 .guide-chat{border-left:1px solid rgba(99,102,241,.25);display:flex;flex-direction:column;background:rgba(2,6,23,.85);min-width:0} .chat-messages{flex:1;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:10px;min-height:0} .msg{max-width:85%;padding:10px 14px;border-radius:14px;font-size:13.5px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere} .msg.user{align-self:flex-end;background:#4f46e5;color:white} .msg.ai{align-self:flex-start;background:#0f172a;border:1px solid rgba(99,102,241,.25)} .msg.ai pre{max-height:220px;overflow:auto;white-space:pre} .chat-input{display:flex;gap:8px;padding:12px;border-top:1px solid rgba(99,102,241,.25)} .chat-input input{flex:1;background:#020617;border:1px solid rgba(99,102,241,.25);border-radius:10px;padding:8px 12px;color:white} .chat-input button{background:#6366f1;border:none;padding:8px 14px;border-radius:10px;color:white;cursor:pointer}
 
-.guide-actions{grid-column:1/4;display:flex;align-items:center;justify-content:flex-end;gap:12px;padding:14px 18px;border-top:1px solid rgba(99,102,241,.25);background:#020617;min-height:72px} .guide-actions button{padding:10px 18px;border:none;border-radius:12px;font-weight:600;cursor:pointer;flex-shrink:0} .guide-actions button:first-of-type{background:#22c55e;color:white} .guide-actions button:nth-of-type(2){background:#6366f1;color:white} .guide-actions button:nth-of-type(3){background:#2563eb;color:white} .guide-actions button:last-of-type{background:#0f172a;color:#cbd5f5;border:1px solid rgba(148,163,184,.3)}
+.guide-actions{grid-column:1/4;display:flex;align-items:center;justify-content:flex-end;gap:12px;padding:14px 18px;border-top:1px solid rgba(99,102,241,.25);background:#020617;min-height:72px}
+.guide-actions button{padding:10px 18px;border:none;border-radius:12px;font-weight:600;cursor:pointer;flex-shrink:0}
+.guide-actions .action-next{background:#22c55e;color:white}
+.guide-actions .action-submit{background:#6366f1;color:white}
+.guide-actions .action-live{background:#2563eb;color:white}
+.guide-actions .action-done{background:#0ea5a6;color:white}
+.guide-actions .action-close{background:#0f172a;color:#cbd5f5;border:1px solid rgba(148,163,184,.3)}
 .guide-actions button:disabled{opacity:.65;cursor:not-allowed}
 .review{margin-right:auto;max-width:55%;max-height:54px;overflow:auto;padding:8px 10px;border-radius:10px;background:rgba(15,23,42,.95);border:1px solid rgba(148,163,184,.35);font-size:12.5px;line-height:1.4}
 .review.correct{border-color:rgba(34,197,94,.55)}
 .review.partial{border-color:rgba(245,158,11,.55)}
 .review.wrong{border-color:rgba(239,68,68,.55)}
 
-.copy-btn{position:absolute;top:12px;right:12px;background:#6366f1;border:none;color:white;padding:6px 10px;border-radius:8px;font-size:12px;cursor:pointer}
+.copy-btn{position:absolute;top:8px;right:10px;background:#6366f1;border:none;color:white;padding:6px 10px;border-radius:8px;font-size:12px;cursor:pointer}
 
 .success-overlay{position:fixed;inset:0;background:rgba(0,0,0,.88);display:flex;align-items:center;justify-content:center;z-index:2000} .success-modal{background:linear-gradient(145deg,#020617,#0f172a);padding:70px 90px;border-radius:26px;text-align:center;border:1px solid rgba(34,197,94,.6);box-shadow:0 0 60px rgba(34,197,94,.6)}
 
@@ -186,3 +213,168 @@
 .confirm-actions button{border:none;border-radius:10px;padding:10px 14px;font-weight:600;cursor:pointer}
 .confirm-actions button:first-child{background:#22c55e;color:white}
 .confirm-actions button:last-child{background:#0f172a;color:#e2e8f0;border:1px solid rgba(148,163,184,.35)}
+
+/* VISUALIZER BLOCK IN BOARD */
+.board-page .visual-wrapper{
+  position:relative;
+  z-index:2;
+  margin-top:18px;
+}
+
+/* RESPONSIVE */
+@media (max-width: 1200px){
+  .board-page{
+    padding:32px 22px;
+  }
+
+  .board-layout{
+    grid-template-columns:1fr;
+    gap:18px;
+  }
+
+  .assistant,
+  .column{
+    min-height:unset;
+  }
+}
+
+@media (max-width: 900px){
+  .board-header h1{
+    font-size:26px;
+  }
+
+  .kanban{
+    grid-template-columns:1fr;
+    gap:12px;
+  }
+
+  .column{
+    padding:14px;
+    border-radius:14px;
+  }
+
+  .task{
+    font-size:13px;
+    padding:11px 12px;
+  }
+
+  .brief-panel{
+    border-radius:14px;
+    padding:16px;
+    gap:10px;
+  }
+
+  .guide-modal{
+    width:min(96vw,760px);
+    height:min(92vh,880px);
+    grid-template-columns:1fr;
+    grid-template-rows:auto minmax(0,1fr) auto;
+  }
+
+  .guide-modal h2{
+    grid-column:1;
+    padding:14px 16px;
+    font-size:18px;
+  }
+
+  .guide-actions{
+    grid-column:1;
+    flex-wrap:wrap;
+    justify-content:stretch;
+    padding:12px;
+    gap:8px;
+  }
+
+  .guide-actions button{
+    flex:1 1 140px;
+    min-height:40px;
+  }
+
+  .code-label{
+    padding-right:14px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:10px;
+  }
+
+  .copy-btn{
+    position:static;
+    padding:7px 10px;
+    font-size:12px;
+  }
+
+  .review{
+    order:-1;
+    margin-right:0;
+    width:100%;
+    max-width:none;
+  }
+
+  .live-try-modal{
+    width:min(96vw,900px);
+    height:min(92vh,860px);
+    border-radius:12px;
+  }
+
+  .live-body{
+    grid-template-columns:1fr;
+    grid-template-rows:1fr 180px;
+  }
+}
+
+@media (max-width: 560px){
+  .board-page{
+    padding:20px 12px;
+  }
+
+  .board-header{
+    margin-bottom:14px;
+  }
+
+  .board-header h1{
+    font-size:22px;
+  }
+
+  .board-header p{
+    font-size:13px;
+    color:#cbd5e1;
+  }
+
+  .column h3{
+    font-size:11px;
+    letter-spacing:1.1px;
+  }
+
+  .guide-overlay,
+  .confirm-overlay,
+  .live-try-overlay{
+    padding:8px;
+  }
+
+  .guide-modal{
+    width:100%;
+    height:100%;
+    border-radius:12px;
+  }
+
+  .guide-modal textarea{
+    min-height:180px;
+  }
+
+  .guide-actions{
+    padding:10px;
+  }
+
+  .guide-actions button{
+    flex:1 1 calc(50% - 8px);
+    border-radius:10px;
+    padding:10px 12px;
+    font-size:13px;
+  }
+
+  .confirm-modal{
+    padding:14px;
+    border-radius:12px;
+  }
+}

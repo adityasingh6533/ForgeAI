@@ -2,7 +2,6 @@ import "../styles/Plan.css";
 import React, { useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import ReactFlow, { Background, Controls, Position } from "reactflow";
-import dagre from "dagre";
 import AnimatedEdge from "../components/Graph/AnimatedEdge";
 import CustomNode from "../components/Graph/CustomNode";
 import "reactflow/dist/style.css";
@@ -21,36 +20,6 @@ function getNodeSize(label) {
   return { width, height };
 }
 
-function getLayoutedElements(nodes, edges) {
-  const graph = new dagre.graphlib.Graph();
-  graph.setDefaultEdgeLabel(() => ({}));
-  graph.setGraph({ rankdir: "LR", nodesep: 72, ranksep: 120 });
-
-  nodes.forEach((node) => {
-    graph.setNode(node.id, node.data.size);
-  });
-
-  edges.forEach((edge) => {
-    graph.setEdge(edge.source, edge.target);
-  });
-
-  dagre.layout(graph);
-
-  const layoutedNodes = nodes.map((node) => {
-    const pos = graph.node(node.id);
-    const { width, height } = node.data.size;
-    return {
-      ...node,
-      position: {
-        x: pos.x - width / 2,
-        y: pos.y - height / 2
-      }
-    };
-  });
-
-  return { nodes: layoutedNodes, edges };
-}
-
 function buildNode(id, label) {
   const size = getNodeSize(label);
   return {
@@ -61,6 +30,83 @@ function buildNode(id, label) {
     sourcePosition: Position.Right,
     targetPosition: Position.Left
   };
+}
+
+function estimateSectionHeight(itemsCount) {
+  return 76 + itemsCount * 92;
+}
+
+function buildDistributedGraph(title, sections) {
+  const nodes = [buildNode("root", title)];
+  const edges = [];
+  nodes[0].position = {
+    x: -nodes[0].data.size.width / 2,
+    y: -nodes[0].data.size.height / 2
+  };
+
+  const sideTotals = { left: 0, right: 0 };
+  const planned = sections.map((section) => {
+    const side = sideTotals.left <= sideTotals.right ? "left" : "right";
+    const sectionHeight = estimateSectionHeight(section.items.length);
+    sideTotals[side] += sectionHeight;
+    return { ...section, side, sectionHeight };
+  });
+
+  const cursor = {
+    left: -(sideTotals.left / 2),
+    right: -(sideTotals.right / 2)
+  };
+
+  planned.forEach((section) => {
+    const lane = section.side;
+    const sectionY = cursor[lane] + section.sectionHeight / 2;
+    cursor[lane] += section.sectionHeight;
+
+    const categoryId = `cat-${section.key}`;
+    const categoryX = lane === "left" ? -280 : 280;
+    const childX = lane === "left" ? -620 : 620;
+    const itemCount = section.items.length;
+    const branchSpan = Math.max(0, (itemCount - 1) * 88);
+    const branchStart = sectionY - branchSpan / 2;
+
+    const categoryNode = buildNode(categoryId, section.label);
+    categoryNode.position = {
+      x: categoryX - categoryNode.data.size.width / 2,
+      y: sectionY - categoryNode.data.size.height / 2
+    };
+
+    nodes.push(categoryNode);
+    edges.push({
+      id: `e-root-${categoryId}`,
+      source: "root",
+      sourceHandle: lane === "left" ? "source-left" : "source-right",
+      target: categoryId,
+      targetHandle: lane === "left" ? "target-right" : "target-left",
+      type: "animated"
+    });
+
+    section.items.forEach((item, index) => {
+      const itemId = `${section.key}-${index}`;
+      const itemY = branchStart + index * 88;
+      const itemNode = buildNode(itemId, item);
+      itemNode.position = {
+        x: childX - itemNode.data.size.width / 2,
+        y: itemY - itemNode.data.size.height / 2
+      };
+      nodes.push(itemNode);
+
+      edges.push({
+        id: `e-${categoryId}-${itemId}`,
+        source: categoryId,
+        sourceHandle: lane === "left" ? "source-left" : "source-right",
+        target: itemId,
+        targetHandle: lane === "left" ? "target-right" : "target-left",
+        type: "animated"
+      });
+    });
+  });
+
+  return { nodes, edges };
 }
 
 export default function Plan() {
@@ -77,26 +123,21 @@ export default function Plan() {
     const features = Array.isArray(source.features) ? source.features : [];
     const database = Array.isArray(source.database) ? source.database : [];
     const apis = Array.isArray(source.apis) ? source.apis : [];
+    const sections = [
+      { key: "features", label: "Core Features", items: features },
+      { key: "database", label: "Data Layer", items: database },
+      { key: "apis", label: "API Surface", items: apis }
+    ].filter((section) => section.items.length > 0);
 
-    const nextNodes = [buildNode("root", title)];
-    const nextEdges = [];
+    if (!sections.length) {
+      return {
+        nodes: [buildNode("root", title)],
+        edges: []
+      };
+    }
 
-    const addNode = (prefix, label, index) => {
-      const id = `${prefix}-${index}`;
-      nextNodes.push(buildNode(id, label));
-      nextEdges.push({
-        id: `e-root-${id}`,
-        source: "root",
-        target: id,
-        type: "animated"
-      });
-    };
-
-    features.forEach((feature, index) => addNode("f", feature, index));
-    database.forEach((item, index) => addNode("d", item, index));
-    apis.forEach((api, index) => addNode("a", api, index));
-
-    return getLayoutedElements(nextNodes, nextEdges);
+    const graph = buildDistributedGraph(title, sections);
+    return { nodes: graph.nodes, edges: graph.edges };
   }, [plan, title]);
 
   if (!plan) {
@@ -114,7 +155,10 @@ export default function Plan() {
     <div className="plan-page">
       <div className="plan-container">
         <div className="plan-header">
-          <h1>{title}</h1>
+          <h1>Execution Blueprint</h1>
+          <div className="plan-title-card">
+            <p>{title}</p>
+          </div>
           <p>AI generated execution blueprint</p>
         </div>
 

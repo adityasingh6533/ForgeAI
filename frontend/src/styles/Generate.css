@@ -1,10 +1,9 @@
 
 .generate-page {
-  height: 100vh;
-  min-height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  width: 100%;
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
   padding: 40px;
   box-sizing: border-box;
 
@@ -38,7 +37,8 @@
 .generate-box{
   position:relative;
   z-index:2;
-  width:700px;
+  width:min(700px, 100%);
+  margin-inline:auto;
   padding:50px;
   border-radius:26px;
 
@@ -66,10 +66,12 @@
 }
 
 .generate-box textarea{
-   margin-left:-15px;
-   margin-top:20px; 
+  display: block;
+  margin:20px auto 0;
   width:100%;
+  max-width:100%;
   height:160px;
+  box-sizing:border-box;
   border-radius:16px;
   border:1px solid rgba(255,255,255,.18);
   background: rgba(2,6,23,.7);
@@ -86,9 +88,10 @@
 }
 
 .generate-box button{
-  margin-left:158px;
-  margin-top:30px;
+  display:block;
+  margin:30px auto 0;
   width:50%;
+  min-width:220px;
   padding:16px;
   border:none;
   border-radius:16px;
@@ -104,4 +107,24 @@
 .generate-box button:hover{
   transform:translateY(-3px);
   box-shadow:0 15px 50px rgba(99,102,241,.6);
+}
+
+@media (max-width: 768px) {
+  .generate-page {
+    padding: 20px;
+  }
+
+  .generate-box {
+    padding: 30px 20px;
+    border-radius: 18px;
+  }
+
+  .generate-box h1 {
+    font-size: 30px;
+  }
+
+  .generate-box button {
+    width: 100%;
+    min-width: 0;
+  }
 }

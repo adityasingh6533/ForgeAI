@@ -1,0 +1,38 @@
+.timeline-container {
+  width: 100%;
+  padding: 8px;
+  box-sizing: border-box;
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(2, 6, 23, 0.35), rgba(2, 6, 23, 0.15));
+}
+
+.timeline-row {
+  display: grid;
+  grid-template-columns: minmax(90px, 120px) minmax(0, 1fr);
+  align-items: center;
+  margin-bottom: 12px;
+  gap: 10px;
+}
+
+.phase-name {
+  color: #cbd5e1;
+  font-size: 12px;
+  letter-spacing: 0.4px;
+}
+
+.timeline-bar {
+  width: 100%;
+  height: 12px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.85);
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.timeline-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #22d3ee, #3b82f6, #4ade80);
+  transition: width 0.35s ease;
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.55);
+}

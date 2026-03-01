@@ -78,6 +78,46 @@ const prev = memory.get(key(idea, task)) || [];
 memory.set(key(idea, task), [...prev, step]);
 };
 
+function evaluateSubmissionEvidence(input = "") {
+const text = String(input || "");
+const normalized = text.trim();
+
+if (!normalized) {
+return {
+ok: false,
+score: 0,
+signals: [],
+reason: "Submission is empty."
+};
+}
+
+const signals = [];
+const lengthScore = normalized.length >= 80 ? 1 : 0;
+if (lengthScore) signals.push("meaningful_length");
+
+if (/```[\s\S]*```/m.test(normalized)) signals.push("code_block");
+if (/\b(import|export|const|let|function|class|def|return|SELECT|INSERT|CREATE)\b/i.test(normalized)) {
+signals.push("code_keywords");
+}
+if (/\b(npm|pnpm|yarn|node|python|pytest|jest|vitest|git|docker|curl)\b/i.test(normalized)) {
+signals.push("command_terms");
+}
+if (/(^|\n)\s*[-*]\s+/m.test(normalized)) signals.push("change_notes");
+if (/[{}();<>]/.test(normalized)) signals.push("syntax_markers");
+
+const score = lengthScore + signals.length;
+const ok = normalized.length >= 40 && signals.length >= 2;
+
+return {
+ok,
+score,
+signals,
+reason: ok
+? ""
+: "Add step-specific proof: code snippet, command output, and a short change note."
+};
+}
+
 /* ===================== LIVE TRY HELPERS ===================== */
 
 const LIVE_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
@@ -256,7 +296,12 @@ Explain shortly what user is about to build.
 Return JSON:
 { "goal":"", "what_you_build":"", "concepts":[], "files_expected":[] }
 No code.
-"}, { role: "user", content:"Project: ${idea}\nTask: ${task}` }
+`
+  },
+  {
+    role: "user",
+    content: `Project: ${idea}\nTask: ${task}`
+  }
 ],0.3);
 
 res.json(JSON.parse(completion.choices[0].message.content));
@@ -287,8 +332,10 @@ Return JSON:
 "where_to_do":"",
 "instruction":"",
 "commands":[],
+"live_try_commands":[],
 "file_path":"",
 "code":"",
+"previewHtml":"",
 "expected_result":"",
 "next_hint":""
 }
@@ -304,8 +351,14 @@ Rules:
 - if step is file-based, provide real working code in "code" (not pseudocode)
 - if step is terminal-based, "commands" must be concrete and executable in order
 - keep "instruction" practical and short (max 2 lines)
+- if UI step exists, include renderable HTML in "previewHtml"
+- include "live_try_commands" for testable commands (can be empty)
 - do not include generic advice without actionable code/commands
-  "}, { role: "user", content:"Project:${idea}\nTask:${task}\nHistory:${JSON.stringify(history)}`
+`
+  },
+  {
+    role: "user",
+    content: `Project:${idea}\nTask:${task}\nHistory:${JSON.stringify(history)}`
   }
   ]);
   
@@ -359,6 +412,17 @@ res.status(500).json({ error: err.message });
 app.post("/review-task", async (req, res) => {
 try {
 const { idea, task, userCode } = req.body;
+const evidence = evaluateSubmissionEvidence(userCode);
+
+if (!evidence.ok) {
+return res.json({
+status: "wrong",
+feedback: evidence.reason,
+fix: "Share concrete step proof with code/command output.",
+correct_code: "",
+evidence
+});
+}
 
 const completion = await jsonCompletion([
   {
@@ -382,7 +446,8 @@ res.json({
 status,
 feedback: parsed?.feedback || "Reviewed.",
 fix: parsed?.fix || "",
-correct_code: parsed?.correct_code || ""
+correct_code: parsed?.correct_code || "",
+evidence
 });
 
 } catch (err) {
@@ -398,7 +463,7 @@ try {
 const { command, commands, url, method, headers, body, idea, task, stepTitle } = req.body || {};
 const history = idea && task ? getHistory(idea, task) : [];
 const latestStep = history[history.length - 1] || {};
-const workflowCommand = latestStep?.commands?.[0];
+const workflowCommand = latestStep?.live_try_commands?.[0] || latestStep?.commands?.[0];
 const allCommands = Array.isArray(commands) && commands.length
 ? commands.filter(Boolean)
 : [command || workflowCommand || ""].filter(Boolean);
