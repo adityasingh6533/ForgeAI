@@ -1,39 +1,13 @@
-import { useEffect, useState } from "react";
 import "./Kanban.css";
 
-const initialTasks = [
-  { id: 1, name: "Setup Project", progress: 0 },
-  { id: 2, name: "Authentication", progress: 0 },
-  { id: 3, name: "Dashboard UI", progress: 0 },
-  { id: 4, name: "API Integration", progress: 0 },
-  { id: 5, name: "Deployment", progress: 0 }
-];
+function toTask(name, progress, key) {
+  return { id: `${name}-${key}`, name, progress };
+}
 
-export default function KanbanView({ day, playing }) {
-
-  const [tasks, setTasks] = useState(initialTasks);
-
-  // project total duration (same as engine max approx)
-  const TOTAL_DAYS = 120;
-
-  useEffect(() => {
-    if (!playing) return;
-
-    const percent = (day / TOTAL_DAYS) * 100;
-
-    setTasks(prev =>
-      prev.map((task, index) => ({
-        ...task,
-        progress: Math.min(100, percent - index * 15)
-      }))
-    );
-
-  }, [day, playing]);
-
-  // categorize
-  const todo = tasks.filter(t => t.progress < 30);
-  const progress = tasks.filter(t => t.progress >= 30 && t.progress < 80);
-  const done = tasks.filter(t => t.progress >= 80);
+export default function KanbanView({ todo = [], doing = null, done = [] }) {
+  const todoTasks = todo.map((task, index) => toTask(task, 0, index));
+  const inProgressTasks = doing ? [toTask(doing, 55, "doing")] : [];
+  const doneTasks = done.map((task, index) => toTask(task, 100, index));
 
   const renderTask = (task) => (
     <div key={task.id} className="task-card">
@@ -53,17 +27,17 @@ export default function KanbanView({ day, playing }) {
 
       <div className="kanban-col">
         <h3>TODO</h3>
-        {todo.map(renderTask)}
+        {todoTasks.map(renderTask)}
       </div>
 
       <div className="kanban-col">
         <h3>IN PROGRESS</h3>
-        {progress.map(renderTask)}
+        {inProgressTasks.map(renderTask)}
       </div>
 
       <div className="kanban-col">
         <h3>DONE</h3>
-        {done.map(renderTask)}
+        {doneTasks.map(renderTask)}
       </div>
 
     </div>

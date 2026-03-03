@@ -1,13 +1,14 @@
-import { useRef, useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { useBrain } from "../../BrainProvider";
 import KanbanView from "./KanbanView";
 import TimelineView from "./TimelineView";
 import ArchitectureView from "./ArchitectureView";
 import "./visualization.css";
 import {
-  ACTIONS,
-  applyImpact,
   initialProjectState,
+  createProjectStateFromBoard,
+  applyReviewResult,
+  applyLiveTryResult,
   predictProjectOutcome,
 } from "./projectState";
 
@@ -27,194 +28,181 @@ function buildSparklinePoints(series, width = 320, height = 120) {
     .join(" ");
 }
 
-function buildSlaProjection(state, proofEvents) {
-  const points = Array.from({ length: 10 }, (_, index) => {
-    const week = index + 1;
-    const base =
-      16 +
-      state.risk * 0.62 +
-      state.complexity * 0.22 +
-      state.teamLoad * 0.16 -
-      state.speed * 0.28;
+function buildRunDependency(results = [], task = "") {
+  const safeResults = Array.isArray(results) ? results : [];
+  const nodes = [{ id: "task", label: task || "Active Task", x: 24, y: 72, health: 100 }];
+  const edges = [];
 
-    const noFix = clamp(base + week * 1.8, 6, 95);
-    const improvement = proofEvents * 4.2 + state.clarity * 0.08 + state.speed * 0.06;
-    const withFix = clamp(noFix - improvement - week * 1.2, 2, 90);
+  safeResults.forEach((result, index) => {
+    const commandText = String(result?.command || result?.url || "execution").trim();
+    const short = commandText.length > 28 ? `${commandText.slice(0, 28)}...` : commandText;
+    const nodeId = `run-${index}`;
+    nodes.push({
+      id: nodeId,
+      label: short || `step-${index + 1}`,
+      x: 174 + index * 140,
+      y: 72,
+      health: result?.ok ? 100 : 25,
+    });
 
-    return {
-      week,
-      noFix: Math.round(noFix),
-      withFix: Math.round(withFix),
-    };
+    const prevId = index === 0 ? "task" : `run-${index - 1}`;
+    const prevNode = nodes.find((node) => node.id === prevId);
+    const currNode = nodes.find((node) => node.id === nodeId);
+    edges.push({
+      id: `${prevId}-${nodeId}`,
+      x1: prevNode.x + 54,
+      y1: prevNode.y + 18,
+      x2: currNode.x + 2,
+      y2: currNode.y + 18,
+      strength: currNode.health,
+    });
   });
 
-  return points;
-}
-
-function getServiceDependency(state) {
-  const services = [
-    { id: "ui", label: "Client UI", x: 56, y: 86, health: state.clarity },
-    { id: "api", label: "API Gateway", x: 220, y: 40, health: state.speed },
-    { id: "auth", label: "Auth", x: 220, y: 132, health: 100 - state.risk },
-    { id: "queue", label: "Event Queue", x: 390, y: 40, health: state.scalability },
-    { id: "db", label: "Data Store", x: 390, y: 132, health: 100 - state.complexity },
-    { id: "obs", label: "Observability", x: 548, y: 86, health: 100 - state.teamLoad },
-  ];
-
-  const links = [
-    ["ui", "api"],
-    ["ui", "auth"],
-    ["api", "queue"],
-    ["api", "db"],
-    ["queue", "obs"],
-    ["db", "obs"],
-    ["auth", "db"],
-  ];
-
-  const getNode = (id) => services.find((s) => s.id === id);
-  const edges = links.map(([from, to]) => {
-    const a = getNode(from);
-    const b = getNode(to);
-    const strength = clamp(Math.round((a.health + b.health) / 2), 0, 100);
-    return {
-      id: `${from}-${to}`,
-      x1: a.x + 54,
-      y1: a.y + 18,
-      x2: b.x + 54,
-      y2: b.y + 18,
-      strength,
-    };
-  });
-
-  return { services, edges };
+  return { nodes, edges };
 }
 
 export default function VisualizationPanel() {
   const [projectState, setProjectState] = useState(initialProjectState);
   const [selectedSuggestion, setSelectedSuggestion] = useState(null);
-  const [simulate, setSimulate] = useState(false);
-  const [isSimulating, setIsSimulating] = useState(false);
-  const [day, setDay] = useState(0);
   const [activeView, setActiveView] = useState("empty");
-  const [proofEvents, setProofEvents] = useState(0);
-  const [history, setHistory] = useState([]);
   const [activeAddon, setActiveAddon] = useState("spike");
-  const intervalRef = useRef(null);
+  const [history, setHistory] = useState([]);
+  const [lastLiveRun, setLastLiveRun] = useState({ task: "", results: [] });
+  const [stats, setStats] = useState({
+    reviews: 0,
+    correct: 0,
+    partial: 0,
+    wrong: 0,
+    liveRuns: 0,
+    livePass: 0,
+  });
+  const [board, setBoard] = useState({
+    steps: [],
+    todo: [],
+    doing: null,
+    done: [],
+  });
 
-  const hasProofDrivenState = proofEvents > 0;
+  const pushHistory = useCallback((eventType, nextState, quality) => {
+    const predicted = predictProjectOutcome(nextState);
+    setHistory((prev) => [
+      ...prev.slice(-24),
+      {
+        at: Date.now(),
+        eventType,
+        score: predicted.score,
+        risk: nextState.risk,
+        quality: clamp(Math.round(Number(quality ?? predicted.score)), 0, 100),
+      },
+    ]);
+  }, []);
 
   const handleBrainEvent = useCallback((event) => {
     if (!event) return;
 
+    if (event.type === "BOARD_SYNC") {
+      const nextBoard = {
+        steps: Array.isArray(event.steps) ? event.steps : [],
+        todo: Array.isArray(event.todo) ? event.todo : [],
+        doing: event.doing || null,
+        done: Array.isArray(event.done) ? event.done : [],
+      };
+      setBoard(nextBoard);
+      setProjectState((prev) => {
+        const merged = { ...prev, ...createProjectStateFromBoard(nextBoard) };
+        return merged;
+      });
+      if (activeView === "empty" && nextBoard.steps.length) {
+        setActiveView("kanban");
+      }
+    }
+
     if (event.type === "TASK_STARTED") {
-      setSelectedSuggestion(event.task || event.payload?.task || null);
+      setSelectedSuggestion(event.task || null);
       setActiveView("kanban");
     }
 
-    if (event.type === "STEP_VALIDATED") {
-      setProofEvents((prev) => prev + 1);
-      setSimulate(true);
+    if (event.type === "REVIEW_RESULT") {
+      const status = String(event.status || "").toLowerCase();
+      setStats((prev) => ({
+        ...prev,
+        reviews: prev.reviews + 1,
+        correct: prev.correct + (status === "correct" ? 1 : 0),
+        partial: prev.partial + (status === "partial" ? 1 : 0),
+        wrong: prev.wrong + (status === "wrong" ? 1 : 0),
+      }));
+      setProjectState((prev) => {
+        const next = applyReviewResult(prev, event);
+        const quality = status === "correct" ? 100 : status === "partial" ? 60 : 20;
+        pushHistory("review", next, quality);
+        return next;
+      });
+    }
+
+    if (event.type === "LIVE_TRY_RESULT") {
+      setStats((prev) => ({
+        ...prev,
+        liveRuns: prev.liveRuns + 1,
+        livePass: prev.livePass + (event.ok ? 1 : 0),
+      }));
+      setLastLiveRun({
+        task: event.task || "",
+        results: Array.isArray(event.results) ? event.results : [],
+      });
       setActiveView("architecture");
-      setProjectState((prev) => applyImpact(prev, ACTIONS.OPTIMIZE));
+      setProjectState((prev) => {
+        const next = applyLiveTryResult(prev, event);
+        pushHistory("live_try", next, event.ok ? 100 : 0);
+        return next;
+      });
     }
 
     if (event.type === "TASK_COMPLETED") {
-      setProofEvents((prev) => prev + 1);
-      setSimulate(true);
       setActiveView("timeline");
-      setProjectState((prev) => applyImpact(prev, ACTIONS.ADD_TIMELINE));
     }
 
     if (event.type === "TASK_RESET") {
-      clearInterval(intervalRef.current);
       setProjectState(initialProjectState);
-      setDay(0);
-      setIsSimulating(false);
-      setActiveView("empty");
       setSelectedSuggestion(null);
-      setSimulate(false);
-      setProofEvents(0);
+      setActiveView("empty");
       setHistory([]);
+      setLastLiveRun({ task: "", results: [] });
+      setBoard({ steps: [], todo: [], doing: null, done: [] });
+      setStats({
+        reviews: 0,
+        correct: 0,
+        partial: 0,
+        wrong: 0,
+        liveRuns: 0,
+        livePass: 0,
+      });
     }
-  }, []);
+  }, [activeView, pushHistory]);
 
   useBrain(handleBrainEvent);
 
-  useEffect(() => {
-    if (!simulate) return;
-
-    clearInterval(intervalRef.current);
-    setIsSimulating(true);
-    setDay(0);
-
-    let currentDay = 0;
-    intervalRef.current = setInterval(() => {
-      currentDay += 5;
-      setDay(currentDay);
-
-      setProjectState((prev) => {
-        if (currentDay >= prev.deliveryTime) {
-          clearInterval(intervalRef.current);
-          setIsSimulating(false);
-        }
-        return prev;
-      });
-    }, 400);
-
-    return () => clearInterval(intervalRef.current);
-  }, [simulate, projectState.deliveryTime]);
-
-  useEffect(() => {
-    if (!hasProofDrivenState) return;
-
-    setHistory((prev) => {
-      const nextEntry = {
-        event: proofEvents,
-        day: projectState.deliveryTime,
-        score: predictProjectOutcome(projectState).score,
-        risk: projectState.risk,
-        speed: projectState.speed,
-      };
-
-      if (prev.length && prev[prev.length - 1].event === proofEvents) {
-        const copy = [...prev];
-        copy[copy.length - 1] = nextEntry;
-        return copy;
-      }
-
-      return [...prev.slice(-11), nextEntry];
-    });
-  }, [projectState, proofEvents, hasProofDrivenState]);
-
-  const resetSimulation = () => {
-    clearInterval(intervalRef.current);
-    setProjectState(initialProjectState);
-    setDay(0);
-    setIsSimulating(false);
-    setActiveView("empty");
-    setSelectedSuggestion(null);
-    setSimulate(false);
-    setProofEvents(0);
-    setHistory([]);
-  };
-
   const prediction = predictProjectOutcome(projectState);
-  const spikeSeries = history.map((entry) => entry.score);
-  const spikePoints = buildSparklinePoints(spikeSeries);
-  const riskPoints = buildSparklinePoints(history.map((entry) => 100 - entry.risk));
-  const dependency = useMemo(() => getServiceDependency(projectState), [projectState]);
-  const slaSeries = useMemo(
-    () => buildSlaProjection(projectState, proofEvents),
-    [projectState, proofEvents]
+  const hasBoardData = board.steps.length > 0;
+  const hasEvaluationData = stats.reviews > 0 || stats.liveRuns > 0;
+  const baselineBoardState = useMemo(() => createProjectStateFromBoard(board), [board]);
+  const spikePoints = buildSparklinePoints(history.map((entry) => entry.score));
+  const qualityPoints = buildSparklinePoints(history.map((entry) => entry.quality));
+  const dependency = useMemo(
+    () => buildRunDependency(lastLiveRun.results, lastLiveRun.task),
+    [lastLiveRun.results, lastLiveRun.task]
   );
-  const slaNoFixPoints = buildSparklinePoints(slaSeries.map((s) => s.noFix));
-  const slaFixPoints = buildSparklinePoints(slaSeries.map((s) => s.withFix));
+  const livePassRate = stats.liveRuns ? Math.round((stats.livePass / stats.liveRuns) * 100) : 0;
 
   const renderView = () => {
-    if (activeView === "kanban") return <KanbanView day={day} playing={isSimulating} />;
-    if (activeView === "timeline") return <TimelineView day={day} playing={isSimulating} />;
-    if (activeView === "architecture") return <ArchitectureView day={day} playing={isSimulating} />;
-
+    if (activeView === "kanban") {
+      return <KanbanView todo={board.todo} doing={board.doing} done={board.done} />;
+    }
+    if (activeView === "timeline") {
+      return <TimelineView steps={board.steps} done={board.done} doing={board.doing} />;
+    }
+    if (activeView === "architecture") {
+      return <ArchitectureView task={lastLiveRun.task || board.doing || ""} results={lastLiveRun.results} />;
+    }
     return <div className="visual-panel empty">Waiting for user action...</div>;
   };
 
@@ -224,27 +212,30 @@ export default function VisualizationPanel() {
 
       <div className="health-panel">
         <div className="health-header">
-          <h3>AI Predicted Project Outcome</h3>
-          <button className="reset-btn" onClick={resetSimulation}>
+          <h3>Real Execution Outcome</h3>
+          <button
+            className="reset-btn"
+            onClick={() => handleBrainEvent({ type: "TASK_RESET" })}
+          >
             Reset
           </button>
         </div>
 
         <div className="prediction-card">
-          {hasProofDrivenState ? (
+          {hasBoardData ? (
             <>
               <strong>{prediction.direction}</strong>
-              <span>Confidence Score: {prediction.score}%</span>
+              <span>Confidence Score: {hasEvaluationData ? `${prediction.score}%` : "Pending evaluation"}</span>
               <p>{prediction.summary}</p>
-              <p>Success Probability: {prediction.successProbability}%</p>
+              <p>Success Probability: {hasEvaluationData ? `${prediction.successProbability}%` : "Pending evaluation"}</p>
               <p>Maturity: {prediction.maturity}</p>
               <p>Est Delivery: {prediction.estimatedDelivery} days</p>
             </>
           ) : (
             <>
-              <strong>Waiting for proof-driven updates</strong>
+              <strong>Waiting for project board data</strong>
               <span>Confidence Score: N/A</span>
-              <p>Submit a valid step proof to start real project scoring.</p>
+              <p>Start a task to initialize real execution metrics.</p>
               <p>Success Probability: N/A</p>
               <p>Maturity: Not Started</p>
               <p>Est Delivery: N/A</p>
@@ -254,19 +245,13 @@ export default function VisualizationPanel() {
 
         {selectedSuggestion && (
           <div className="current-suggestion">
-            Active Strategy: <strong>{selectedSuggestion}</strong>
+            Active Task: <strong>{selectedSuggestion}</strong>
           </div>
         )}
 
-        {isSimulating && <div className="simulation-day">Simulating Day: {day}</div>}
-
         <div className="comparison-banner">
           Delivery Reduced By:
-          <strong>
-            {hasProofDrivenState
-              ? `${initialProjectState.deliveryTime - projectState.deliveryTime} days`
-              : " N/A"}
-          </strong>
+          <strong>{hasBoardData ? ` ${Math.max(0, baselineBoardState.deliveryTime - projectState.deliveryTime)} days` : " N/A"}</strong>
         </div>
 
         <div className="addon-tabs">
@@ -286,7 +271,7 @@ export default function VisualizationPanel() {
             className={activeAddon === "sla" ? "addon-tab active" : "addon-tab"}
             onClick={() => setActiveAddon("sla")}
           >
-            SLA Sim
+            Trend
           </button>
         </div>
 
@@ -297,21 +282,24 @@ export default function VisualizationPanel() {
               <svg viewBox="0 0 320 120" className="spark-svg" role="img" aria-label="Metric spike chart">
                 <polyline points="0,118 320,118" className="spark-base" />
                 <polyline points={spikePoints || "0,118 320,118"} className="spark-line score" />
-                <polyline points={riskPoints || "0,118 320,118"} className="spark-line risk" />
+                <polyline points={qualityPoints || "0,118 320,118"} className="spark-line risk" />
               </svg>
               <div className="addon-legend">
                 <span className="legend score">Execution score</span>
-                <span className="legend risk">Risk inversion</span>
+                <span className="legend risk">Validation quality</span>
               </div>
             </div>
           )}
 
           {activeAddon === "deps" && (
             <div className="addon-card">
-              <h4>Service Dependency Graph</h4>
+              <h4>Execution Dependency Graph</h4>
               <div className="dependency-graph">
                 <div className="dependency-canvas">
-                  <svg viewBox="0 0 660 188" className="dependency-lines">
+                  <svg
+                    viewBox={`0 0 ${Math.max(660, dependency.nodes.length * 150)} 188`}
+                    className="dependency-lines"
+                  >
                     {dependency.edges.map((edge) => (
                       <line
                         key={edge.id}
@@ -323,7 +311,7 @@ export default function VisualizationPanel() {
                       />
                     ))}
                   </svg>
-                  {dependency.services.map((service) => (
+                  {dependency.nodes.map((service) => (
                     <div
                       key={service.id}
                       className={`service-node ${service.health >= 60 ? "healthy" : "fragile"}`}
@@ -340,53 +328,59 @@ export default function VisualizationPanel() {
 
           {activeAddon === "sla" && (
             <div className="addon-card">
-              <h4>SLA Breach Prediction + Fix Simulation</h4>
-              <svg viewBox="0 0 320 120" className="spark-svg" role="img" aria-label="SLA breach projection">
+              <h4>Observed Trend</h4>
+              <svg viewBox="0 0 320 120" className="spark-svg" role="img" aria-label="Observed execution trend">
                 <polyline points="0,118 320,118" className="spark-base" />
-                <polyline points={slaNoFixPoints} className="spark-line breach" />
-                <polyline points={slaFixPoints} className="spark-line fix" />
+                <polyline points={spikePoints || "0,118 320,118"} className="spark-line breach" />
+                <polyline points={qualityPoints || "0,118 320,118"} className="spark-line fix" />
               </svg>
               <div className="addon-legend">
-                <span className="legend breach">Without fixes</span>
-                <span className="legend fix">With validated fixes</span>
+                <span className="legend breach">Outcome score</span>
+                <span className="legend fix">Validation quality</span>
               </div>
               <p className="sla-note">
-                Week 10 breach risk: {slaSeries[slaSeries.length - 1]?.noFix}% vs{" "}
-                {slaSeries[slaSeries.length - 1]?.withFix}%
+                Events tracked: {history.length} | Reviews: {stats.reviews} | Live runs: {stats.liveRuns}
               </p>
             </div>
           )}
         </div>
 
+        <div className="metric">
+          <span className="metric-name">reviewAccuracy</span>
+          <div className="metric-bar">
+            <div
+              className="metric-fill"
+              style={{
+                width: `${stats.reviews ? Math.round(((stats.correct + stats.partial * 0.5) / stats.reviews) * 100) : 0}%`,
+              }}
+            />
+          </div>
+          <span className="metric-value">
+            {stats.reviews ? `${Math.round(((stats.correct + stats.partial * 0.5) / stats.reviews) * 100)}%` : "N/A"}
+          </span>
+        </div>
+
+        <div className="metric">
+          <span className="metric-name">liveTryPassRate</span>
+          <div className="metric-bar">
+            <div className="metric-fill" style={{ width: `${livePassRate}%` }} />
+          </div>
+          <span className="metric-value">{stats.liveRuns ? `${livePassRate}%` : "N/A"}</span>
+        </div>
+
         {Object.entries(projectState).map(([key, value]) => {
-          if (typeof value !== "number") return null;
-
-          if (!hasProofDrivenState) {
-            return (
-              <div key={key} className="metric">
-                <span className="metric-name">{key}</span>
-                <div className="metric-bar">
-                  <div className="metric-fill" style={{ width: "0%" }} />
-                </div>
-                <span className="metric-value">N/A</span>
-              </div>
-            );
-          }
-
           const isDelivery = key === "deliveryTime";
-          const barWidth = isDelivery ? Math.min(100, (value / 120) * 100) : value;
-
+          const barWidth = isDelivery ? Math.min(100, value) : value;
           return (
             <div key={key} className="metric">
               <span className="metric-name">{key}</span>
               <div className="metric-bar">
                 <div className="metric-fill" style={{ width: `${barWidth}%` }} />
               </div>
-              <span className="metric-value">{isDelivery ? `${value} days` : `${value}%`}</span>
+              <span className="metric-value">{isDelivery ? `${Math.round(value)} days` : `${Math.round(value)}%`}</span>
             </div>
           );
         })}
-
       </div>
     </div>
   );

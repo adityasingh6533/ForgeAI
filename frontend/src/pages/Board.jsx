@@ -1,6 +1,6 @@
 import "../styles/Board.css";
 import { useLocation, useNavigate } from "react-router-dom";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useBrainDispatch } from "../BrainProvider";
 import LivePreview from "../components/LivePreview";
 import VisualizationPanel from "../ai/visualizer/VisualizationPanel";
@@ -13,7 +13,7 @@ export default function Board() {
   const { dispatchAction } = useBrainDispatch();
 
   const { plan, idea } = location.state || {};
-  const steps = plan?.steps || [];
+  const steps = useMemo(() => (Array.isArray(plan?.steps) ? plan.steps : []), [plan]);
 
   const [doing, setDoing] = useState(null);
   const [done, setDone] = useState([]);
@@ -32,6 +32,18 @@ export default function Board() {
   const [liveResultOpen, setLiveResultOpen] = useState(false);
   const [liveResult, setLiveResult] = useState(null);
   const [validatedStepKeys, setValidatedStepKeys] = useState([]);
+
+  useEffect(() => {
+    const todo = steps.filter((step) => !done.includes(step) && step !== doing);
+    dispatchAction({
+      type: "BOARD_SYNC",
+      idea,
+      steps,
+      todo,
+      doing,
+      done,
+    });
+  }, [dispatchAction, idea, steps, doing, done]);
 
   useEffect(() => {
     if (!plan) navigate("/");
@@ -77,7 +89,7 @@ export default function Board() {
   const validateProofInput = (input) => {
     const text = String(input || "").trim();
     if (text.length < 40) {
-      return { ok: false, reason: "Proof bahut short hai. Step-specific code/command add karo." };
+      return { ok: false, reason: "Proof is too short. Add step-specific code or command output." };
     }
 
     const indicators = [
@@ -89,7 +101,7 @@ export default function Board() {
     ].filter(Boolean).length;
 
     if (indicators < 2) {
-      return { ok: false, reason: "Code snippet + command output ya change notes add karo." };
+      return { ok: false, reason: "Add a code snippet plus command output or clear change notes." };
     }
 
     return { ok: true, reason: "" };
@@ -143,7 +155,9 @@ export default function Board() {
     dispatchAction({
       type: "TASK_STARTED",
       task: briefTask,
-      idea
+      idea,
+      steps,
+      done,
     });
 
     await loadGuide(briefTask);
@@ -153,7 +167,7 @@ export default function Board() {
     if (!isReviewAccepted) {
       setReview({
         status: "wrong",
-        feedback: "Next Step lock hai. Pehle valid proof submit karo."
+        feedback: "Next Step is locked. Submit valid proof first."
       });
       return;
     }
@@ -174,20 +188,41 @@ export default function Board() {
       const res = await fetch(`${API}/review-task`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ idea, task: doing, userCode: code }),
+        body: JSON.stringify({
+          idea,
+          task: doing,
+          userCode: code,
+          stepContext: guide || null,
+        }),
       });
+      if (!res.ok) {
+        throw new Error(`Review failed (${res.status})`);
+      }
       const data = await res.json();
+      const feedbackParts = [data?.feedback || "Review unavailable"];
+      if (data?.fix) feedbackParts.push(`Fix: ${data.fix}`);
 
       setReview({
         status: data?.status || "wrong",
-        feedback: data?.feedback || "Review unavailable"
+        feedback: feedbackParts.join("\n")
+      });
+
+      dispatchAction({
+        type: "REVIEW_RESULT",
+        idea,
+        task: doing,
+        step: guide?.step_title || "",
+        status: data?.status || "wrong",
+        evidence: data?.evidence || null,
       });
 
       if ((data?.status || "").toLowerCase() === "correct" && !validatedStepKeys.includes(currentStepKey)) {
         dispatchAction({
           type: "STEP_VALIDATED",
           task: doing,
-          step: guide?.step_title
+          step: guide?.step_title,
+          idea,
+          status: data?.status || "correct",
         });
         setValidatedStepKeys((prev) => [...prev, currentStepKey]);
       }
@@ -202,7 +237,7 @@ export default function Board() {
     if (!isReviewAccepted) {
       setReview({
         status: "wrong",
-        feedback: "Task complete karne se pehle Submit pe correct aana zaroori hai."
+        feedback: "Task can be completed only after a correct submission."
       });
       return;
     }
@@ -224,9 +259,18 @@ export default function Board() {
         ok: false,
         stepTitle: guide?.step_title || "",
         results: [],
-        error: "Is step ke liye live command missing hai. Backend task-guide se `live_try_commands` return karo."
+        error: "Live command is missing for this step. Backend task-guide must return `live_try_commands`."
       });
       setLiveResultOpen(true);
+      dispatchAction({
+        type: "LIVE_TRY_RESULT",
+        idea,
+        task: doing,
+        step: guide?.step_title || "",
+        ok: false,
+        results: [],
+        error: "Missing live_try_commands",
+      });
       return;
     }
 
@@ -239,13 +283,22 @@ export default function Board() {
           idea,
           task: doing,
           stepTitle: guide?.step_title || "",
-          commands
+          commands,
+          whereToDo: guide?.where_to_do || "",
         }),
       });
 
       const data = await res.json();
       setLiveResult(data);
       setLiveResultOpen(true);
+      dispatchAction({
+        type: "LIVE_TRY_RESULT",
+        idea,
+        task: doing,
+        step: guide?.step_title || "",
+        ok: Boolean(data?.ok),
+        results: Array.isArray(data?.results) ? data.results : [],
+      });
     } catch (err) {
       setLiveResult({
         ok: false,
@@ -254,6 +307,15 @@ export default function Board() {
         error: err?.message || "Live try failed"
       });
       setLiveResultOpen(true);
+      dispatchAction({
+        type: "LIVE_TRY_RESULT",
+        idea,
+        task: doing,
+        step: guide?.step_title || "",
+        ok: false,
+        results: [],
+        error: err?.message || "Live try failed",
+      });
     } finally {
       setLiveRunning(false);
     }
@@ -271,7 +333,9 @@ export default function Board() {
       type: "TASK_COMPLETED",
       task: pendingDoneTask,
       idea,
-      step: guide?.step_title
+      step: guide?.step_title,
+      steps,
+      done: [...done, pendingDoneTask],
     });
 
     setDone((prev) => [...prev, pendingDoneTask]);
@@ -372,9 +436,9 @@ export default function Board() {
               <div className="chat-messages">
                 <div className="msg ai">
                   <b>Workspace flow:</b>
-                  {"\n"}1) Step instruction implement karo
-                  {"\n"}2) Proof paste karke Submit karo
-                  {"\n"}3) Live Try se verify karo
+                  {"\n"}1) Implement the current step
+                  {"\n"}2) Paste proof and click Submit
+                  {"\n"}3) Verify with Live Try
                   {"\n"}4) Next Step / Mark Done
                 </div>
                 <div className="msg ai">
@@ -391,7 +455,7 @@ export default function Board() {
                 </div>
                 <div className="msg ai">
                   <b>Presentation line for demo:</b>
-                  {"\n"}"Yahan step-wise proof submit hota hai, isliye execution auditable aur explainable ban jata hai."
+                  {"\n"}"Step-wise proof makes execution auditable and easy to explain."
                 </div>
               </div>
             </div>

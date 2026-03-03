@@ -1,45 +1,20 @@
-import { useEffect, useState } from "react";
 import "./timeline.css";
 
-const phases = [
-  { name: "Planning", duration: 20 },
-  { name: "Design", duration: 25 },
-  { name: "Development", duration: 40 },
-  { name: "Testing", duration: 20 },
-  { name: "Deployment", duration: 15 }
-];
-
-export default function TimelineView({ day, playing }) {
-
-  const [progressData, setProgressData] = useState(phases);
-
-  useEffect(() => {
-    if (!playing) return;
-
-    setProgressData(prev =>
-      prev.map((phase, index) => {
-        const start = prev
-          .slice(0, index)
-          .reduce((acc, p) => acc + p.duration, 0);
-
-        const end = start + phase.duration;
-
-        let percent = 0;
-
-        if (day >= end) percent = 100;
-        else if (day > start)
-          percent = ((day - start) / phase.duration) * 100;
-
-        return { ...phase, progress: Math.min(percent, 100) };
-      })
-    );
-
-  }, [day, playing]);
+export default function TimelineView({ steps = [], done = [], doing = null }) {
+  const progressData = steps.map((step) => {
+    if (done.includes(step)) {
+      return { name: step, progress: 100 };
+    }
+    if (doing && step === doing) {
+      return { name: step, progress: 55 };
+    }
+    return { name: step, progress: 0 };
+  });
 
   return (
     <div className="timeline-container">
-      {progressData.map((phase, i) => (
-        <div key={i} className="timeline-row">
+      {progressData.map((phase, index) => (
+        <div key={`${phase.name}-${index}`} className="timeline-row">
 
           <span className="phase-name">
             {phase.name}

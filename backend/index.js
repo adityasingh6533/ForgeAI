@@ -118,6 +118,236 @@ reason: ok
 };
 }
 
+function extractKeywords(input = "") {
+const text = String(input || "")
+  .toLowerCase()
+  .replace(/[^a-z0-9_\-/.\s]/g, " ");
+const words = text.split(/\s+/).filter(Boolean);
+const set = new Set();
+for (const word of words) {
+  if (word.length < 4) continue;
+  if (["this", "that", "with", "from", "into", "have", "your", "step", "task", "code", "file", "json"].includes(word)) continue;
+  set.add(word);
+}
+return set;
+}
+
+function overlapScore(aSet, bSet) {
+if (!aSet.size || !bSet.size) return 0;
+let hit = 0;
+for (const token of aSet) {
+  if (bSet.has(token)) hit += 1;
+}
+return hit;
+}
+
+function evaluateContextMatch(userCode = "", step = {}, task = "") {
+const submissionTokens = extractKeywords(userCode);
+const contextText = [
+  task || "",
+  step?.step_title || "",
+  step?.instruction || "",
+  step?.where_to_do || "",
+  step?.file_path || "",
+  step?.expected_result || "",
+].join(" ");
+
+const contextTokens = extractKeywords(contextText);
+const commandTokens = extractKeywords(Array.isArray(step?.commands) ? step.commands.join(" ") : "");
+const liveTokens = extractKeywords(Array.isArray(step?.live_try_commands) ? step.live_try_commands.join(" ") : "");
+const filePath = String(step?.file_path || "").trim().toLowerCase();
+
+const contextOverlap = overlapScore(contextTokens, submissionTokens);
+const commandOverlap = overlapScore(commandTokens, submissionTokens);
+const liveOverlap = overlapScore(liveTokens, submissionTokens);
+const mentionsFilePath = filePath ? String(userCode || "").toLowerCase().includes(filePath) : false;
+
+return {
+  contextOverlap,
+  commandOverlap,
+  liveOverlap,
+  mentionsFilePath,
+  score: contextOverlap + commandOverlap + liveOverlap + (mentionsFilePath ? 2 : 0),
+};
+}
+
+function getLatestLiveTryForStep(idea, task, stepTitle = "") {
+const attempts = liveTryMemory.get(key(idea, task)) || [];
+if (!attempts.length) return null;
+if (!stepTitle) return attempts[attempts.length - 1];
+
+const target = String(stepTitle || "").trim().toLowerCase();
+for (let i = attempts.length - 1; i >= 0; i -= 1) {
+  const current = attempts[i];
+  if (String(current?.stepTitle || "").trim().toLowerCase() === target) {
+    return current;
+  }
+}
+return null;
+}
+
+function hasExecutableCommands(commands = []) {
+return Array.isArray(commands) && commands.some((cmd) => {
+  const text = String(cmd || "").trim().toLowerCase();
+  if (!text) return false;
+  return !/^echo\b/.test(text);
+});
+}
+
+function hasStepLiveCommands(step = {}) {
+return hasExecutableCommands(step?.live_try_commands);
+}
+
+function hasStrongAnchors(context = {}) {
+return Boolean(
+  context.mentionsFilePath ||
+  context.commandOverlap > 0 ||
+  context.liveOverlap > 0
+);
+}
+
+function buildDeterministicReview({ evidence, context, liveAttempt, requiresLive }) {
+const hasLiveAttempt = Boolean(liveAttempt && Array.isArray(liveAttempt.results));
+const livePass = hasLiveAttempt ? liveAttempt.results.every((r) => r?.ok) : false;
+const contextStrong = context.score >= 5;
+const contextBasic = context.score >= 3;
+const evidenceStrong = evidence.score >= 5;
+const evidenceBasic = evidence.ok;
+const strongAnchors = hasStrongAnchors(context);
+
+let status = "wrong";
+let feedback = "Proof does not clearly match this step yet.";
+let fix = "Include step-specific code, commands, and expected result evidence.";
+
+if (!requiresLive && evidenceStrong && contextStrong && strongAnchors) {
+  status = "correct";
+  feedback = "Deterministic checks passed with strong context match and concrete proof.";
+  fix = "";
+} else if (requiresLive && livePass && evidenceBasic && contextBasic && strongAnchors) {
+  status = "correct";
+  feedback = "Deterministic checks passed with matching proof and successful live execution.";
+  fix = "";
+} else if ((evidenceBasic && contextBasic) || (evidenceStrong && context.score >= 2)) {
+  status = "partial";
+  feedback = requiresLive
+    ? "Evidence exists but live verification is required for final acceptance."
+    : "Evidence exists but context alignment is incomplete.";
+  fix = requiresLive
+    ? "Run Live Try for this step and submit updated proof/output."
+    : "Add exact file-path proof and command output for this step.";
+} else if (!evidence.ok) {
+  status = "wrong";
+  feedback = evidence.reason || "Submission lacks concrete proof.";
+  fix = "Share step-specific code block and command output.";
+}
+
+return {
+  status,
+  feedback,
+  fix,
+  correct_code: "",
+  checks: {
+    evidence,
+    context,
+    requiresLive,
+    hasLiveAttempt,
+    livePass,
+  },
+};
+}
+
+function sanitizeRelativePath(rawPath = "") {
+const value = String(rawPath || "")
+  .trim()
+  .replace(/^["']|["']$/g, "")
+  .replace(/\\/g, "/");
+if (!value || value === ".") return "";
+if (value.includes("..")) return "";
+if (path.isAbsolute(value)) return "";
+return value;
+}
+
+function inferWhereToDoFromCommands(commands = []) {
+if (!Array.isArray(commands)) return "";
+for (const cmd of commands) {
+  const match = String(cmd || "").trim().match(/^cd\s+(.+)$/i);
+  if (!match) continue;
+  const candidate = sanitizeRelativePath(match[1]);
+  if (candidate) return candidate;
+}
+return "";
+}
+
+function inferLiveTryCommands(commands = []) {
+if (!Array.isArray(commands)) return [];
+const preferred = commands.filter((cmd) => {
+  const text = String(cmd || "").toLowerCase();
+  return /(test|pytest|jest|vitest|curl|http|npm run|node|python|go test|cargo test)/.test(text);
+});
+const source = preferred.length ? preferred : commands;
+return source
+  .map((cmd) => String(cmd || "").trim())
+  .filter(Boolean)
+  .slice(0, 3);
+}
+
+function normalizeTaskGuide(raw = {}, task = "") {
+const stepTitle = String(raw?.step_title || task || "Implementation Step").trim();
+const instruction = String(raw?.instruction || "").trim();
+const commands = Array.isArray(raw?.commands)
+  ? raw.commands.map((cmd) => String(cmd || "").trim()).filter(Boolean)
+  : [];
+const filePath = sanitizeRelativePath(raw?.file_path || "");
+const whereFromFile = filePath ? sanitizeRelativePath(path.posix.dirname(filePath)) : "";
+const whereFromCommands = inferWhereToDoFromCommands(commands);
+const whereToDo = sanitizeRelativePath(raw?.where_to_do || "") || whereFromCommands || whereFromFile || ".";
+const liveTry = hasExecutableCommands(raw?.live_try_commands)
+  ? raw.live_try_commands.map((cmd) => String(cmd || "").trim()).filter(Boolean).slice(0, 3)
+  : inferLiveTryCommands(commands);
+
+return {
+  step_title: stepTitle,
+  where_to_do: whereToDo,
+  instruction: instruction || `Complete: ${stepTitle}`,
+  commands,
+  live_try_commands: liveTry,
+  file_path: filePath || "",
+  code: String(raw?.code || ""),
+  previewHtml: String(raw?.previewHtml || ""),
+  expected_result: String(raw?.expected_result || ""),
+  next_hint: String(raw?.next_hint || ""),
+};
+}
+
+function normalizeReviewStepContext(raw = {}) {
+if (!raw || typeof raw !== "object") return null;
+return normalizeTaskGuide(raw, raw?.step_title || "Implementation Step");
+}
+
+function buildCorrectionPack(step = {}) {
+const expectedCommands = Array.isArray(step?.commands) ? step.commands.filter(Boolean) : [];
+const liveTryCommands = Array.isArray(step?.live_try_commands) ? step.live_try_commands.filter(Boolean) : [];
+const pieces = [];
+
+if (step?.file_path) {
+  pieces.push(`Target file: ${step.file_path}`);
+}
+if (expectedCommands.length) {
+  pieces.push(`Expected commands:\n${expectedCommands.map((c) => `- ${c}`).join("\n")}`);
+}
+if (liveTryCommands.length) {
+  pieces.push(`Live verify commands:\n${liveTryCommands.map((c) => `- ${c}`).join("\n")}`);
+}
+if (step?.expected_result) {
+  pieces.push(`Expected result: ${step.expected_result}`);
+}
+if (step?.code) {
+  pieces.push(`Reference implementation:\n${step.code}`);
+}
+
+return pieces.join("\n\n");
+}
+
 /* ===================== LIVE TRY HELPERS ===================== */
 
 const LIVE_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
@@ -135,6 +365,39 @@ if (!rawPath) return baseCwd;
 if (path.isAbsolute(rawPath)) return path.normalize(rawPath);
 return path.normalize(path.resolve(baseCwd, rawPath));
 };
+
+const normalizeWorkspacePath = (rawPath = "") =>
+String(rawPath || "")
+  .trim()
+  .replace(/^["']|["']$/g, "")
+  .replace(/\\/g, "/");
+
+function resolveWorkspaceDir(whereToDo = "") {
+const candidate = normalizeWorkspacePath(whereToDo);
+if (!candidate) return null;
+
+const checks = [
+  path.resolve(LIVE_WORKSPACE_ROOT, candidate),
+  path.resolve(process.cwd(), candidate),
+  path.resolve(LIVE_WORKSPACE_ROOT, candidate.replace(/^\.\//, "")),
+];
+
+for (const dir of checks) {
+  if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()) {
+    return path.normalize(dir);
+  }
+}
+
+return null;
+}
+
+function detectCommandTimeout(command = "") {
+const text = String(command || "").toLowerCase();
+if (/(npm|pnpm|yarn)\s+(install|ci|build|test)/.test(text)) return 120000;
+if (/(pytest|jest|vitest|go test|cargo test|mvn test|gradle test)/.test(text)) return 120000;
+if (/(npm|pnpm|yarn)\s+run\s+dev/.test(text)) return 30000;
+return 45000;
+}
 
 async function runShellCommand(rawCommand, session) {
 const command = String(rawCommand || "").trim();
@@ -173,7 +436,7 @@ stderr: ""
 try {
 const { stdout, stderr } = await execAsync(command, {
 cwd: session.cwd,
-timeout: 15000,
+timeout: detectCommandTimeout(command),
 maxBuffer: 1024 * 1024
 });
 return {
@@ -351,8 +614,10 @@ Rules:
 - if step is file-based, provide real working code in "code" (not pseudocode)
 - if step is terminal-based, "commands" must be concrete and executable in order
 - keep "instruction" practical and short (max 2 lines)
+- "where_to_do" must be a valid project-relative directory (example: "frontend", "backend", "src/components")
+- "file_path" must be a valid project-relative path (example: "frontend/src/App.jsx")
 - if UI step exists, include renderable HTML in "previewHtml"
-- include "live_try_commands" for testable commands (can be empty)
+- include at least one concrete command in "live_try_commands" for every executable step
 - do not include generic advice without actionable code/commands
 `
   },
@@ -363,8 +628,9 @@ Rules:
   ]);
   
   const json = JSON.parse(completion.choices[0].message.content);
-  pushHistory(idea, task, json);
-  res.json(json);
+  const normalized = normalizeTaskGuide(json, task);
+  pushHistory(idea, task, normalized);
+  res.json(normalized);
   } catch (err) {
   res.status(500).json({ error: err.message });
   }
@@ -411,43 +677,66 @@ res.status(500).json({ error: err.message });
 
 app.post("/review-task", async (req, res) => {
 try {
-const { idea, task, userCode } = req.body;
-const evidence = evaluateSubmissionEvidence(userCode);
-
-if (!evidence.ok) {
-return res.json({
-status: "wrong",
-feedback: evidence.reason,
-fix: "Share concrete step proof with code/command output.",
-correct_code: "",
-evidence
-});
+const { idea, task, userCode, stepContext } = req.body;
+if (!idea || !task) {
+  return res.status(400).json({
+    status: "wrong",
+    feedback: "Missing required fields: idea and task.",
+    fix: "Send both idea and task in request body.",
+    correct_code: "",
+    deterministic: true,
+  });
 }
 
-const completion = await jsonCompletion([
-  {
-    role: "system",
-    content: `
-You are a fair implementation reviewer.
-Judge only the asked task. Do not enforce unrelated extras.
-If the submission satisfies the current task intent, mark it correct.
-Accept valid alternative implementations and equivalent commands.
-If user's result is achieved with a different method, mark correct.
-Return JSON:
-{ "status":"correct|partial|wrong","feedback":"","fix":"","correct_code":"" }
-`}, { role: "user", content:`Project:${idea}\nTask:${task}\nSubmission:\n${String(userCode || "").slice(0,6000)}` }
-]);
+const evidence = evaluateSubmissionEvidence(userCode);
+const history = getHistory(idea, task);
+const providedStep = normalizeReviewStepContext(stepContext);
+const latestStep = providedStep || history[history.length - 1] || {};
+if (!latestStep?.step_title) {
+  return res.status(400).json({
+    status: "wrong",
+    feedback: "No active step context found for review.",
+    fix: "Load a step via task-guide and send stepContext from frontend.",
+    correct_code: "",
+    deterministic: true,
+  });
+}
 
-const parsed = JSON.parse(completion.choices[0].message.content || "{}");
-const rawStatus = String(parsed?.status || "").toLowerCase();
-const status = rawStatus.includes("correct") ? "correct" : rawStatus.includes("partial") ? "partial" : "wrong";
+const context = evaluateContextMatch(userCode, latestStep, task);
+const latestLiveAttempt = getLatestLiveTryForStep(idea, task, latestStep?.step_title || "");
+const requiresLive = hasStepLiveCommands(latestStep);
+const correctionPack = buildCorrectionPack(latestStep);
+
+if (!evidence.ok) {
+  return res.json({
+  status: "wrong",
+  feedback: evidence.reason,
+  fix: "Share concrete step proof with code/command output.",
+  correct_code: correctionPack,
+  evidence,
+  checks: {
+    context,
+    requiresLive,
+    hasLiveAttempt: Boolean(latestLiveAttempt),
+    livePass: Boolean(latestLiveAttempt && latestLiveAttempt.results?.every((r) => r?.ok)),
+  },
+  deterministic: true,
+  });
+}
+
+const result = buildDeterministicReview({
+  evidence,
+  context,
+  liveAttempt: latestLiveAttempt,
+  requiresLive,
+});
 
 res.json({
-status,
-feedback: parsed?.feedback || "Reviewed.",
-fix: parsed?.fix || "",
-correct_code: parsed?.correct_code || "",
-evidence
+...result,
+correct_code: result.status === "correct" ? "" : correctionPack,
+evidence,
+step_title: latestStep?.step_title || "",
+deterministic: true,
 });
 
 } catch (err) {
@@ -460,7 +749,18 @@ res.status(500).json({ error: err.message });
 app.post("/live-try", async (req, res) => {
 let timeout;
 try {
-const { command, commands, url, method, headers, body, idea, task, stepTitle } = req.body || {};
+const {
+  command,
+  commands,
+  url,
+  method,
+  headers,
+  body,
+  idea,
+  task,
+  stepTitle,
+  whereToDo,
+} = req.body || {};
 const history = idea && task ? getHistory(idea, task) : [];
 const latestStep = history[history.length - 1] || {};
 const workflowCommand = latestStep?.live_try_commands?.[0] || latestStep?.commands?.[0];
@@ -468,6 +768,10 @@ const allCommands = Array.isArray(commands) && commands.length
 ? commands.filter(Boolean)
 : [command || workflowCommand || ""].filter(Boolean);
 const session = getSession(idea, task);
+const desiredDir = resolveWorkspaceDir(whereToDo || latestStep?.where_to_do || "");
+if (desiredDir) {
+  session.cwd = desiredDir;
+}
 const results = [];
 
 for (const item of allCommands) {
@@ -503,7 +807,7 @@ finalHeaders["Content-Type"] = "application/json";
 }
 
 const controller = new AbortController();
-timeout = setTimeout(() => controller.abort(), 15000);
+timeout = setTimeout(() => controller.abort(), 20000);
 
 try {
 const response = await fetch(finalUrl, {
