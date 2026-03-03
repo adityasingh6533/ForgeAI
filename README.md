@@ -32,6 +32,18 @@ ForgeAI is built for makers who don’t want planning and execution in separate 
 - Styling: Custom CSS
 - AI Integration: API-driven assistant workflow
 
+## Backend Setup
+
+1. Go to `backend`
+2. Create `.env` from `.env.example`
+3. Set:
+   - `OPENAI_API_KEY`
+   - `MONGO_URI` (required for persistent session memory; if missing, backend runs in memory mode)
+4. Start backend: `npm run dev`
+
+Health check:
+- `GET /health` now returns `persistence: "mongodb"` or `persistence: "memory"`
+
 ## Project Structure
 
 ```txt

@@ -9,7 +9,6 @@ export default function Generate() {
 
   const handleGenerate = () => {
     if (!idea.trim()) return alert("Enter your idea first");
-    console.log("Idea:", idea);
     navigate("/thinking", { state: { idea: idea.trim() } });
   };
 

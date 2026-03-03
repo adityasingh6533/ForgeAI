@@ -6,6 +6,7 @@ import { exec } from "child_process";
 import { promisify } from "util";
 import fs from "fs";
 import path from "path";
+import mongoose from "mongoose";
 
 dotenv.config();
 
@@ -13,6 +14,32 @@ const app = express();
 const PORT = Number(process.env.PORT) || 5001;
 const execAsync = promisify(exec);
 const LIVE_WORKSPACE_ROOT = process.env.LIVE_WORKSPACE_ROOT || path.resolve(process.cwd(), "..");
+const MONGO_URI = process.env.MONGO_URI || "";
+const MAX_COMMAND_LENGTH = 300;
+const SHELL_META_PATTERN = /[|&;<>()`$]/;
+const BLOCKED_COMMAND_PATTERN = /\b(rm|rmdir|del|format|shutdown|reboot|mkfs|dd|chmod|chown|sudo|powershell|pwsh|cmd|bash|zsh|fish|scp|ssh)\b/i;
+const ALLOWED_COMMAND_PREFIXES = [
+  "cd ",
+  "npm ",
+  "pnpm ",
+  "yarn ",
+  "node ",
+  "python ",
+  "pytest",
+  "jest",
+  "vitest",
+  "go test",
+  "cargo test",
+  "curl ",
+  "echo ",
+  "git status",
+  "git diff",
+  "ls",
+  "dir",
+  "Get-ChildItem",
+  "cat ",
+  "type ",
+];
 
 app.use(cors());
 app.use(express.json({ limit: "4mb" }));
@@ -20,7 +47,11 @@ app.use(express.json({ limit: "4mb" }));
 /* ===================== HEALTH ===================== */
 
 app.get("/health", (_req, res) => {
-res.json({ ok: true, service: "phantasia-backend" });
+res.json({
+ok: true,
+service: "phantasia-backend",
+persistence: mongoEnabled ? "mongodb" : "memory",
+});
 });
 
 if (!process.env.OPENAI_API_KEY) {
@@ -29,6 +60,39 @@ process.exit(1);
 }
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+/* ===================== PERSISTENT STORE ===================== */
+
+const sessionSchema = new mongoose.Schema(
+  {
+    idea: { type: String, required: true },
+    task: { type: String, required: true },
+    history: { type: [mongoose.Schema.Types.Mixed], default: [] },
+    liveAttempts: { type: [mongoose.Schema.Types.Mixed], default: [] },
+    reviewEvents: { type: [mongoose.Schema.Types.Mixed], default: [] },
+  },
+  { timestamps: true }
+);
+sessionSchema.index({ idea: 1, task: 1 }, { unique: true });
+
+const TaskSession = mongoose.models.TaskSession || mongoose.model("TaskSession", sessionSchema);
+
+let mongoEnabled = false;
+
+async function initPersistentStore() {
+  if (!MONGO_URI) {
+    console.warn("MONGO_URI not set. Running with in-memory session state.");
+    return;
+  }
+  try {
+    await mongoose.connect(MONGO_URI);
+    mongoEnabled = true;
+    console.log("MongoDB connected for persistent sessions.");
+  } catch (err) {
+    mongoEnabled = false;
+    console.error("MongoDB connect failed. Falling back to memory store:", err.message);
+  }
+}
 
 /* ===================== MODEL FALLBACK ===================== */
 
@@ -71,12 +135,79 @@ const memory = new Map();
 const key = (idea, task) => `${idea}::${task}`;
 const liveTryMemory = new Map();
 const liveShellSessions = new Map();
+const reviewEventMemory = new Map();
+
+async function hydrateSessionIfNeeded(idea, task) {
+const sessionKey = key(idea, task);
+if (memory.has(sessionKey) || !mongoEnabled) return;
+const existing = await TaskSession.findOne({ idea, task }).lean();
+if (!existing) return;
+memory.set(sessionKey, Array.isArray(existing.history) ? existing.history : []);
+liveTryMemory.set(sessionKey, Array.isArray(existing.liveAttempts) ? existing.liveAttempts : []);
+reviewEventMemory.set(sessionKey, Array.isArray(existing.reviewEvents) ? existing.reviewEvents : []);
+}
+
+async function getHistoryAsync(idea, task) {
+await hydrateSessionIfNeeded(idea, task);
+return memory.get(key(idea, task)) || [];
+}
 
 const getHistory = (idea, task) => memory.get(key(idea, task)) || [];
-const pushHistory = (idea, task, step) => {
-const prev = memory.get(key(idea, task)) || [];
-memory.set(key(idea, task), [...prev, step]);
+
+async function pushHistory(idea, task, step) {
+const sessionKey = key(idea, task);
+const prev = memory.get(sessionKey) || [];
+const next = [...prev, step].slice(-40);
+memory.set(sessionKey, next);
+if (!mongoEnabled) return;
+await TaskSession.findOneAndUpdate(
+  { idea, task },
+  { $set: { history: next }, $setOnInsert: { idea, task } },
+  { upsert: true, new: false }
+);
+}
+
+async function pushLiveAttempt(idea, task, attempt) {
+const sessionKey = key(idea, task);
+const prev = liveTryMemory.get(sessionKey) || [];
+const next = [...prev, attempt].slice(-30);
+liveTryMemory.set(sessionKey, next);
+if (!mongoEnabled) return;
+await TaskSession.findOneAndUpdate(
+  { idea, task },
+  { $set: { liveAttempts: next }, $setOnInsert: { idea, task } },
+  { upsert: true, new: false }
+);
+}
+
+async function pushReviewEvent(idea, task, event) {
+const sessionKey = key(idea, task);
+const prev = reviewEventMemory.get(sessionKey) || [];
+const next = [...prev, event].slice(-30);
+reviewEventMemory.set(sessionKey, next);
+if (!mongoEnabled) return;
+await TaskSession.findOneAndUpdate(
+  { idea, task },
+  { $set: { reviewEvents: next }, $setOnInsert: { idea, task } },
+  { upsert: true, new: false }
+);
+}
+
+async function getSessionContextAsync(idea, task) {
+await hydrateSessionIfNeeded(idea, task);
+const sessionKey = key(idea, task);
+const history = memory.get(sessionKey) || [];
+const liveAttempts = liveTryMemory.get(sessionKey) || [];
+const reviewEvents = reviewEventMemory.get(sessionKey) || [];
+return {
+  history,
+  liveAttempts,
+  reviewEvents,
+  latestHistory: history[history.length - 1] || null,
+  latestLive: liveAttempts[liveAttempts.length - 1] || null,
+  latestReview: reviewEvents[reviewEvents.length - 1] || null,
 };
+}
 
 function evaluateSubmissionEvidence(input = "") {
 const text = String(input || "");
@@ -171,7 +302,8 @@ return {
 };
 }
 
-function getLatestLiveTryForStep(idea, task, stepTitle = "") {
+async function getLatestLiveTryForStep(idea, task, stepTitle = "") {
+await hydrateSessionIfNeeded(idea, task);
 const attempts = liveTryMemory.get(key(idea, task)) || [];
 if (!attempts.length) return null;
 if (!stepTitle) return attempts[attempts.length - 1];
@@ -360,6 +492,22 @@ liveShellSessions.set(sessionKey, { cwd: LIVE_WORKSPACE_ROOT });
 return liveShellSessions.get(sessionKey);
 };
 
+function isInsideWorkspace(targetPath) {
+const root = path.resolve(LIVE_WORKSPACE_ROOT);
+const candidate = path.resolve(targetPath);
+const relative = path.relative(root, candidate);
+return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function isAllowedShellCommand(raw = "") {
+const command = String(raw || "").trim();
+if (!command) return false;
+if (command.length > MAX_COMMAND_LENGTH) return false;
+if (SHELL_META_PATTERN.test(command)) return false;
+if (BLOCKED_COMMAND_PATTERN.test(command)) return false;
+return ALLOWED_COMMAND_PREFIXES.some((prefix) => command.startsWith(prefix));
+}
+
 const asAbsoluteDir = (baseCwd, rawPath) => {
 if (!rawPath) return baseCwd;
 if (path.isAbsolute(rawPath)) return path.normalize(rawPath);
@@ -375,15 +523,15 @@ String(rawPath || "")
 function resolveWorkspaceDir(whereToDo = "") {
 const candidate = normalizeWorkspacePath(whereToDo);
 if (!candidate) return null;
+if (path.isAbsolute(candidate)) return null;
+if (candidate.includes("..")) return null;
 
 const checks = [
   path.resolve(LIVE_WORKSPACE_ROOT, candidate),
-  path.resolve(process.cwd(), candidate),
-  path.resolve(LIVE_WORKSPACE_ROOT, candidate.replace(/^\.\//, "")),
 ];
 
 for (const dir of checks) {
-  if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()) {
+  if (isInsideWorkspace(dir) && fs.existsSync(dir) && fs.statSync(dir).isDirectory()) {
     return path.normalize(dir);
   }
 }
@@ -405,10 +553,35 @@ if (!command) {
 return { type: "shell", command, ok: false, error: "Empty command", cwd: session.cwd };
 }
 
+if (!isAllowedShellCommand(command)) {
+return {
+type: "shell",
+command,
+ok: false,
+code: 1,
+cwd: session.cwd,
+stdout: "",
+stderr: "",
+error: "Blocked command. Only safe workspace commands are allowed."
+};
+}
+
 const cdMatch = command.match(/^cd\s+(.+)$/i);
 if (cdMatch) {
 const target = cdMatch[1].trim().replace(/^["']|["']$/g, "");
 const nextDir = asAbsoluteDir(session.cwd, target);
+if (!isInsideWorkspace(nextDir)) {
+return {
+type: "shell",
+command,
+ok: false,
+code: 1,
+cwd: session.cwd,
+stdout: "",
+stderr: "",
+error: "Directory is outside the configured workspace root."
+};
+}
 if (!fs.existsSync(nextDir) || !fs.statSync(nextDir).isDirectory()) {
 return {
 type: "shell",
@@ -509,6 +682,158 @@ if (!LIVE_METHODS.has(method)) method = "GET";
 return { method, url, headers, body };
 }
 
+/* ===================== REPO-AWARE CHECKS ===================== */
+
+function truncateText(input = "", max = 700) {
+const text = String(input || "");
+if (text.length <= max) return text;
+return `${text.slice(0, max)}...`;
+}
+
+function normalizeGitPath(raw = "") {
+return String(raw || "").trim().replace(/\\/g, "/");
+}
+
+async function getRepoSignals(step = {}, userCode = "") {
+const workspace = path.resolve(LIVE_WORKSPACE_ROOT);
+const targetFile = sanitizeRelativePath(step?.file_path || "");
+const response = {
+  workspace,
+  targetFile,
+  targetFileExists: false,
+  fileTouchedInGit: false,
+  changedFiles: [],
+  targetDiffPreview: "",
+  userMentionsTarget: false,
+};
+
+if (targetFile) {
+  const absolute = path.resolve(workspace, targetFile);
+  response.targetFileExists = fs.existsSync(absolute) && fs.statSync(absolute).isFile();
+  response.userMentionsTarget = String(userCode || "").toLowerCase().includes(targetFile.toLowerCase());
+}
+
+try {
+  const { stdout } = await execAsync("git status --porcelain", {
+    cwd: workspace,
+    timeout: 12000,
+    maxBuffer: 1024 * 1024,
+  });
+  const changedFiles = String(stdout || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => normalizeGitPath(line.slice(3).trim()));
+  response.changedFiles = changedFiles.slice(0, 120);
+  if (targetFile) {
+    response.fileTouchedInGit = changedFiles.some((p) => p === targetFile || p.endsWith(`/${targetFile}`));
+  }
+} catch (err) {
+  response.gitStatusError = truncateText(err?.message || "git status failed", 220);
+}
+
+if (targetFile && response.fileTouchedInGit) {
+  try {
+    const { stdout } = await execAsync(`git diff -- "${targetFile}"`, {
+      cwd: workspace,
+      timeout: 12000,
+      maxBuffer: 1024 * 1024,
+    });
+    response.targetDiffPreview = truncateText(stdout, 900);
+  } catch (err) {
+    response.gitDiffError = truncateText(err?.message || "git diff failed", 220);
+  }
+}
+
+return response;
+}
+
+async function runCommandWithCapture(command, cwd, timeout = 90000) {
+try {
+  const { stdout, stderr } = await execAsync(command, {
+    cwd,
+    timeout,
+    maxBuffer: 1024 * 1024,
+  });
+  return {
+    command,
+    ok: true,
+    stdout: truncateText(stdout, 900),
+    stderr: truncateText(stderr, 600),
+  };
+} catch (err) {
+  return {
+    command,
+    ok: false,
+    stdout: truncateText(err?.stdout, 900),
+    stderr: truncateText(err?.stderr || err?.message, 700),
+  };
+}
+}
+
+function resolveAutoCheckDir(step = {}) {
+const whereToDo = sanitizeRelativePath(step?.where_to_do || "");
+const filePath = sanitizeRelativePath(step?.file_path || "");
+const candidate = whereToDo || (filePath ? path.posix.dirname(filePath) : "");
+if (!candidate || candidate === ".") return null;
+const absolute = path.resolve(LIVE_WORKSPACE_ROOT, candidate);
+if (!absolute.startsWith(path.resolve(LIVE_WORKSPACE_ROOT))) return null;
+if (!fs.existsSync(absolute) || !fs.statSync(absolute).isDirectory()) return null;
+return absolute;
+}
+
+async function runAutoChecksForStep(step = {}) {
+const rootDir = resolveAutoCheckDir(step) || path.resolve(LIVE_WORKSPACE_ROOT);
+const packageJsonPath = path.join(rootDir, "package.json");
+const checks = [];
+
+if (fs.existsSync(packageJsonPath)) {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8"));
+    const scripts = pkg?.scripts || {};
+    if (scripts.lint) {
+      checks.push(await runCommandWithCapture("npm run lint", rootDir, 120000));
+    } else if (scripts.test) {
+      checks.push(await runCommandWithCapture("npm run test -- --watchAll=false --passWithNoTests", rootDir, 120000));
+    } else if (scripts.build) {
+      checks.push(await runCommandWithCapture("npm run build", rootDir, 120000));
+    }
+  } catch (err) {
+    checks.push({
+      command: "package-json-parse",
+      ok: false,
+      stdout: "",
+      stderr: truncateText(err?.message || "Failed to parse package.json", 400),
+    });
+  }
+}
+
+const targetFile = sanitizeRelativePath(step?.file_path || "");
+if (targetFile && /\.(m?js|cjs)$/i.test(targetFile)) {
+  const absoluteTarget = path.resolve(LIVE_WORKSPACE_ROOT, targetFile);
+  if (fs.existsSync(absoluteTarget) && fs.statSync(absoluteTarget).isFile()) {
+    checks.push(await runCommandWithCapture(`node --check "${absoluteTarget}"`, path.dirname(absoluteTarget), 30000));
+  }
+}
+
+const executed = checks.length;
+const passed = checks.filter((c) => c.ok).length;
+const failed = executed - passed;
+
+return {
+  rootDir,
+  executed,
+  passed,
+  failed,
+  checks,
+  summary: executed === 0
+    ? "No auto-check target detected for this step."
+    : failed === 0
+      ? `All ${executed} auto-check(s) passed.`
+      : `${failed}/${executed} auto-check(s) failed.`,
+};
+}
+
 /* ===================== GENERATE PLAN ===================== */
 
 app.post("/generate-plan", async (req, res) => {
@@ -580,7 +905,8 @@ app.post("/task-guide", async (req, res) => {
 try {
 const { idea, task } = req.body;
 
-const history = getHistory(idea, task);
+const session = await getSessionContextAsync(idea, task);
+const history = session.history;
 
 const completion = await jsonCompletion([
   {
@@ -623,13 +949,13 @@ Rules:
   },
   {
     role: "user",
-    content: `Project:${idea}\nTask:${task}\nHistory:${JSON.stringify(history)}`
+    content: `Project:${idea}\nTask:${task}\nHistory:${JSON.stringify(history)}\nLatestLiveTry:${JSON.stringify(session.latestLive || {})}\nLatestReviewSignal:${JSON.stringify(session.latestReview || {})}`
   }
   ]);
   
   const json = JSON.parse(completion.choices[0].message.content);
   const normalized = normalizeTaskGuide(json, task);
-  pushHistory(idea, task, normalized);
+  await pushHistory(idea, task, normalized);
   res.json(normalized);
   } catch (err) {
   res.status(500).json({ error: err.message });
@@ -641,7 +967,8 @@ Rules:
 app.post("/task-chat", async (req, res) => {
 try {
 const { idea, task, message, currentStep, userCode } = req.body;
-const history = getHistory(idea, task);
+const session = await getSessionContextAsync(idea, task);
+const history = session.history;
 const stepContext = currentStep || history[history.length - 1] || {};
 
 const completion = await jsonCompletion([
@@ -662,7 +989,7 @@ Rules:
   },
   {
     role: "user",
-    content: `Project:${idea}\nTask:${task}\nCurrentStep:${JSON.stringify(stepContext)}\nUserProgress:${String(userCode || "").slice(0,2000)}\nQuestion:${message}`
+    content: `Project:${idea}\nTask:${task}\nCurrentStep:${JSON.stringify(stepContext)}\nUserProgress:${String(userCode || "").slice(0,2000)}\nLatestLiveTry:${JSON.stringify(session.latestLive || {})}\nLatestReviewSignal:${JSON.stringify(session.latestReview || {})}\nQuestion:${message}`
   }
 ],0.2);
 
@@ -689,7 +1016,7 @@ if (!idea || !task) {
 }
 
 const evidence = evaluateSubmissionEvidence(userCode);
-const history = getHistory(idea, task);
+const history = await getHistoryAsync(idea, task);
 const providedStep = normalizeReviewStepContext(stepContext);
 const latestStep = providedStep || history[history.length - 1] || {};
 if (!latestStep?.step_title) {
@@ -703,17 +1030,40 @@ if (!latestStep?.step_title) {
 }
 
 const context = evaluateContextMatch(userCode, latestStep, task);
-const latestLiveAttempt = getLatestLiveTryForStep(idea, task, latestStep?.step_title || "");
+const latestLiveAttempt = await getLatestLiveTryForStep(idea, task, latestStep?.step_title || "");
 const requiresLive = hasStepLiveCommands(latestStep);
 const correctionPack = buildCorrectionPack(latestStep);
 
 if (!evidence.ok) {
+  const repo = await getRepoSignals(latestStep, userCode);
+  const autoChecks = await runAutoChecksForStep(latestStep);
+  await pushReviewEvent(idea, task, {
+    at: new Date().toISOString(),
+    task,
+    stepTitle: latestStep?.step_title || "",
+    status: "wrong",
+    context,
+    evidence,
+    repo: {
+      targetFile: repo.targetFile,
+      targetFileExists: repo.targetFileExists,
+      fileTouchedInGit: repo.fileTouchedInGit,
+    },
+    autoChecks: {
+      executed: autoChecks.executed,
+      passed: autoChecks.passed,
+      failed: autoChecks.failed,
+    },
+    fix: "Share concrete step proof with code/command output.",
+  });
   return res.json({
   status: "wrong",
   feedback: evidence.reason,
   fix: "Share concrete step proof with code/command output.",
   correct_code: correctionPack,
   evidence,
+  repo,
+  autoChecks,
   checks: {
     context,
     requiresLive,
@@ -724,6 +1074,9 @@ if (!evidence.ok) {
   });
 }
 
+const repo = await getRepoSignals(latestStep, userCode);
+const autoChecks = await runAutoChecksForStep(latestStep);
+
 const result = buildDeterministicReview({
   evidence,
   context,
@@ -731,11 +1084,37 @@ const result = buildDeterministicReview({
   requiresLive,
 });
 
+if (result.status !== "correct" && repo.targetFileExists && repo.fileTouchedInGit && repo.targetDiffPreview) {
+  result.feedback = `${result.feedback}\nRepo signals detected real file changes for this step.`;
+}
+
+await pushReviewEvent(idea, task, {
+  at: new Date().toISOString(),
+  task,
+  stepTitle: latestStep?.step_title || "",
+  status: result.status,
+  context,
+  evidence,
+  repo: {
+    targetFile: repo.targetFile,
+    targetFileExists: repo.targetFileExists,
+    fileTouchedInGit: repo.fileTouchedInGit,
+  },
+  autoChecks: {
+    executed: autoChecks.executed,
+    passed: autoChecks.passed,
+    failed: autoChecks.failed,
+  },
+  fix: result.fix || "",
+});
+
 res.json({
 ...result,
 correct_code: result.status === "correct" ? "" : correctionPack,
 evidence,
 step_title: latestStep?.step_title || "",
+ repo,
+ autoChecks,
 deterministic: true,
 });
 
@@ -761,7 +1140,7 @@ const {
   stepTitle,
   whereToDo,
 } = req.body || {};
-const history = idea && task ? getHistory(idea, task) : [];
+const history = idea && task ? await getHistoryAsync(idea, task) : [];
 const latestStep = history[history.length - 1] || {};
 const workflowCommand = latestStep?.live_try_commands?.[0] || latestStep?.commands?.[0];
 const allCommands = Array.isArray(commands) && commands.length
@@ -862,16 +1241,11 @@ results
 });
 
 if (idea && task) {
-const k = key(idea, task);
-const prev = liveTryMemory.get(k) || [];
-liveTryMemory.set(k, [
-...prev,
-{
+await pushLiveAttempt(idea, task, {
 at: new Date().toISOString(),
 stepTitle: stepTitle || latestStep?.step_title || "",
 results
-}
-]);
+});
 }
 } catch (err) {
 const message = err?.name === "AbortError" ? "Live try request timed out." : err.message;
@@ -881,13 +1255,84 @@ if (timeout) clearTimeout(timeout);
 }
 });
 
+/* ===================== AUTO CHECKS ===================== */
+
+app.post("/auto-checks", async (req, res) => {
+try {
+  const { idea, task, stepContext } = req.body || {};
+  if (!idea || !task) {
+    return res.status(400).json({ error: "idea and task are required." });
+  }
+  const history = await getHistoryAsync(idea, task);
+  const latestStep = normalizeReviewStepContext(stepContext) || history[history.length - 1] || {};
+  if (!latestStep?.step_title) {
+    return res.status(400).json({ error: "No step context found for auto checks." });
+  }
+
+  const autoChecks = await runAutoChecksForStep(latestStep);
+  res.json({
+    ok: autoChecks.failed === 0,
+    step_title: latestStep.step_title,
+    autoChecks,
+  });
+} catch (err) {
+  res.status(500).json({ error: err.message });
+}
+});
+
+/* ===================== SESSION INSIGHTS ===================== */
+
+app.post("/session-insights", async (req, res) => {
+try {
+  const { idea, task } = req.body || {};
+  if (!idea || !task) {
+    return res.status(400).json({ error: "idea and task are required." });
+  }
+  await hydrateSessionIfNeeded(idea, task);
+  const sessionKey = key(idea, task);
+  const history = memory.get(sessionKey) || [];
+  const liveAttempts = liveTryMemory.get(sessionKey) || [];
+  const reviews = reviewEventMemory.get(sessionKey) || [];
+
+  const lastReview = reviews[reviews.length - 1] || null;
+  const lastLive = liveAttempts[liveAttempts.length - 1] || null;
+
+  res.json({
+    ok: true,
+    idea,
+    task,
+    totals: {
+      stepsGenerated: history.length,
+      liveAttempts: liveAttempts.length,
+      reviews: reviews.length,
+    },
+    latest: {
+      review: lastReview,
+      live: lastLive,
+      step: history[history.length - 1] || null,
+    },
+  });
+} catch (err) {
+  res.status(500).json({ error: err.message });
+}
+});
+
 /* ===================== RESET ===================== */
 
-app.post("/reset-task", (req, res) => {
+app.post("/reset-task", async (req, res) => {
 const { idea, task } = req.body;
-memory.delete(key(idea, task));
+const sessionKey = key(idea, task);
+memory.delete(sessionKey);
+liveTryMemory.delete(sessionKey);
+reviewEventMemory.delete(sessionKey);
+liveShellSessions.delete(sessionKey);
+if (mongoEnabled) {
+  await TaskSession.findOneAndDelete({ idea, task });
+}
 res.json({ ok: true });
 });
 
+initPersistentStore().finally(() => {
 app.listen(PORT, () => console.log("Phantasia backend running on " + PORT));
+});
 

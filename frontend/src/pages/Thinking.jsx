@@ -28,11 +28,9 @@ export default function Thinking() {
   const steps = mode === "build" ? buildSteps : planSteps;
 
   const [index, setIndex] = useState(0);
-
-  
   const hasRequested = useRef(false);
+  const timeoutRefs = useRef([]);
 
-  
   useEffect(() => {
     const interval = setInterval(() => {
       setIndex(prev => (prev < steps.length - 1 ? prev + 1 : prev));
@@ -40,8 +38,10 @@ export default function Thinking() {
     return () => clearInterval(interval);
   }, [steps.length]);
 
-  
   useEffect(() => {
+    const controller = new AbortController();
+    let isMounted = true;
+
     if (!idea) {
       navigate("/generate");
       return;
@@ -56,11 +56,13 @@ export default function Thinking() {
         return;
       }
 
-      setTimeout(() => {
+      const id = setTimeout(() => {
+        if (!isMounted) return;
         navigate("/board", {
           state: { plan, idea }
         });
       }, 1800);
+      timeoutRefs.current.push(id);
       return;
     }
 
@@ -69,7 +71,8 @@ export default function Thinking() {
         const res = await fetch(`${API_BASE_URL}/generate-plan`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ idea })
+          body: JSON.stringify({ idea }),
+          signal: controller.signal,
         });
 
         if (!res.ok) {
@@ -84,13 +87,16 @@ export default function Thinking() {
 
         const data = await res.json();
 
-        setTimeout(() => {
+        const id = setTimeout(() => {
+          if (!isMounted) return;
           navigate("/plan", {
             state: { plan: data, idea }
           });
         }, 2800);
+        timeoutRefs.current.push(id);
 
       } catch (err) {
+        if (!isMounted || err?.name === "AbortError") return;
         console.error("AI ERROR:", err);
         alert(`AI generation failed: ${err.message}`);
         navigate("/generate");
@@ -98,6 +104,12 @@ export default function Thinking() {
     };
 
     generatePlan();
+    return () => {
+      isMounted = false;
+      controller.abort();
+      timeoutRefs.current.forEach((id) => clearTimeout(id));
+      timeoutRefs.current = [];
+    };
 
   }, [idea, navigate, mode, plan]);
 

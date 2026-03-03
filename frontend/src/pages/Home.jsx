@@ -1,6 +1,9 @@
 import "../styles/Home.css";
+import { useNavigate } from "react-router-dom";
 
 export default function Home() {
+  const navigate = useNavigate();
+
   return (
     <div className="home">
 
@@ -11,7 +14,7 @@ export default function Home() {
           features, APIs, database, and next steps instantly.
         </p>
 
-        <button className="cta-btn" onClick={()=> window.location.href="/generate"}>
+        <button className="cta-btn" onClick={() => navigate("/generate")}>
           Start With Your Idea
         </button>
       </div>

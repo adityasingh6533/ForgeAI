@@ -3,6 +3,7 @@
   padding: 48px 24px;
   background: url("../assets/bg-image.jpg") center/cover no-repeat;
   position: relative;
+  isolation: isolate;
 }
 
 .plan-page::before {
@@ -12,11 +13,22 @@
   background: linear-gradient(rgba(2, 6, 23, 0.78), rgba(2, 6, 23, 0.9));
 }
 
+.plan-page::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 18% 25%, rgba(56, 189, 248, 0.22), transparent 42%),
+    radial-gradient(circle at 82% 70%, rgba(99, 102, 241, 0.24), transparent 48%);
+  animation: aurora-shift 15s ease-in-out infinite;
+}
+
 .plan-container {
   position: relative;
   z-index: 1;
   max-width: 1340px;
   margin: 0 auto;
+  animation: page-enter 720ms var(--ease-soft);
 }
 
 .plan-header {
@@ -32,6 +44,7 @@
   font-size: clamp(24px, 3.2vw, 36px);
   color: #dbeafe;
   letter-spacing: 0.4px;
+  animation: float-y 6.2s ease-in-out infinite;
 }
 
 .plan-header p {
@@ -79,6 +92,12 @@
     rgba(2, 6, 23, 0.92);
   box-shadow: 0 22px 56px rgba(2, 6, 23, 0.52);
   overflow: hidden;
+  transition: transform var(--motion-fast) var(--ease-soft), box-shadow var(--motion-fast) ease;
+}
+
+.mindmap:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 28px 64px rgba(2, 6, 23, 0.62);
 }
 
 .mindmap .react-flow {
@@ -97,6 +116,12 @@
   flex-direction: column;
   max-height: 700px;
   overflow: auto;
+  transition: transform var(--motion-fast) var(--ease-soft), box-shadow var(--motion-fast) ease;
+}
+
+.idea-brief:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 24px 60px rgba(2, 6, 23, 0.56);
 }
 
 .idea-brief h3,
@@ -127,11 +152,12 @@
   font-size: 15px;
   font-weight: 700;
   cursor: pointer;
-  transition: transform 0.15s ease, opacity 0.15s ease;
+  transition: transform var(--motion-fast) var(--ease-soft), opacity var(--motion-fast) ease, box-shadow var(--motion-fast) ease;
+  animation: pulse-glow 3.9s ease-in-out infinite;
 }
 
 .start-btn:hover {
-  transform: translateY(-2px);
+  transform: translateY(-3px) scale(1.01);
   opacity: 0.95;
 }
 

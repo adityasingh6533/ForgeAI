@@ -40,7 +40,15 @@ function getPreviewDoc(guide) {
 `;
 }
 
-export default function LivePreview({ guide, onClose }) {
+export default function LivePreview({
+  guide,
+  onClose,
+  liveRunning = false,
+  liveResult = null,
+  steps = [],
+  done = [],
+  doing = "",
+}) {
   const previewDoc = useMemo(() => getPreviewDoc(guide), [guide]);
   const consoleText = [
     `Step: ${guide?.step_title || "Current Step"}`,
@@ -48,28 +56,97 @@ export default function LivePreview({ guide, onClose }) {
     "Instruction:",
     guide?.instruction || "No instruction available.",
     "",
-    "Commands:",
-    Array.isArray(guide?.commands) && guide.commands.length
-      ? guide.commands.join("\n")
-      : "No commands provided.",
-    "",
     "Expected Result:",
     guide?.expected_result || "Not specified.",
   ].join("\n");
 
+  const commands = Array.isArray(guide?.live_try_commands) && guide.live_try_commands.length
+    ? guide.live_try_commands
+    : Array.isArray(guide?.commands)
+      ? guide.commands
+      : [];
+  const resultRows = Array.isArray(liveResult?.results) ? liveResult.results : [];
+  const totalSteps = Array.isArray(steps) ? steps.length : 0;
+  const doneCount = Array.isArray(done) ? done.length : 0;
+  const progress = totalSteps ? Math.round((doneCount / totalSteps) * 100) : 0;
+  const passCount = resultRows.filter((row) => row?.ok).length;
+  const failCount = resultRows.length - passCount;
+
   return (
-    <div className="live-try-overlay" role="dialog" aria-modal="true">
-      <div className="live-try-modal">
+    <div className="live-try-overlay full" role="dialog" aria-modal="true">
+      <div className="live-try-modal full">
         <div className="live-preview">
           <div className="live-header">
+            <div className="live-header-meta">
+              <strong>Live Integration Preview</strong>
+              <span>{guide?.where_to_do ? `Workspace: ${guide.where_to_do}` : "Workspace: current project"}</span>
+            </div>
+            <div className="live-step-progress">
+              <span>{`Progress: ${doneCount}/${totalSteps || 0} steps`}</span>
+              <div className="live-progress-track">
+                <div className="live-progress-fill" style={{ width: `${progress}%` }} />
+              </div>
+              <small>{doing ? `Active: ${doing}` : "No active task"}</small>
+            </div>
             <button type="button" onClick={onClose}>
               Close
             </button>
           </div>
           <div className="live-body">
-            <iframe title="Live Preview" sandbox="allow-scripts" srcDoc={previewDoc} />
-            <div className="live-console">
-              <pre>{consoleText}</pre>
+            <div className="live-frame-wrap">
+              <iframe title="Live Preview" sandbox="allow-scripts" srcDoc={previewDoc} />
+            </div>
+            <div className="live-console-wrap">
+              <div className="live-console">
+                <pre>{consoleText}</pre>
+              </div>
+              <div className="live-command-block">
+                <h4>Integration Commands</h4>
+                {commands.length ? (
+                  <ol>
+                    {commands.map((command, index) => (
+                      <li
+                        key={`${command}-${index}`}
+                        className={resultRows[index] ? (resultRows[index].ok ? "ok" : "fail") : ""}
+                      >
+                        <code>{command}</code>
+                        {resultRows[index] && (
+                          <span>{resultRows[index].ok ? "Pass" : "Fail"}</span>
+                        )}
+                      </li>
+                    ))}
+                  </ol>
+                ) : (
+                  <p>No commands generated for this step yet.</p>
+                )}
+              </div>
+              <div className="live-result-block">
+                <h4>Live Result</h4>
+                {liveRunning && <p>Running commands...</p>}
+                {!liveRunning && liveResult && (
+                  <>
+                    <p className={liveResult?.ok ? "ok-text" : "fail-text"}>
+                      {liveResult?.ok ? "Execution stable for this step." : "Weak points detected in execution."}
+                    </p>
+                    <p>{`Pass: ${passCount} | Fail: ${Math.max(failCount, 0)}`}</p>
+                    {!!liveResult?.error && <p className="fail-text">{liveResult.error}</p>}
+                    {resultRows.some((row) => !row?.ok) && (
+                      <ul className="live-fail-list">
+                        {resultRows
+                          .filter((row) => !row?.ok)
+                          .slice(0, 3)
+                          .map((row, index) => (
+                            <li key={`${row?.command || row?.url || "fail"}-${index}`}>
+                              <code>{row?.command || row?.url || "execution"}</code>
+                              <span>{row?.error || row?.stderr || row?.statusText || "failed"}</span>
+                            </li>
+                          ))}
+                      </ul>
+                    )}
+                  </>
+                )}
+                {!liveRunning && !liveResult && <p>Run Live Try to collect real integration output.</p>}
+              </div>
             </div>
           </div>
         </div>

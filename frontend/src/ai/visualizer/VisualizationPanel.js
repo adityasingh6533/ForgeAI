@@ -61,6 +61,128 @@ function buildRunDependency(results = [], task = "") {
   return { nodes, edges };
 }
 
+function buildOptimizationInsights({ projectState, stats, board, lastLiveRun, prediction, reviewDiagnostics }) {
+  const insights = [];
+  const recentResults = Array.isArray(lastLiveRun?.results) ? lastLiveRun.results : [];
+  const failedRuns = recentResults.filter((item) => !item?.ok);
+  const failRate = stats.liveRuns ? (stats.liveRuns - stats.livePass) / stats.liveRuns : 0;
+  const reviewFailureRate = stats.reviews ? stats.wrong / stats.reviews : 0;
+  const reviewPartialRate = stats.reviews ? stats.partial / stats.reviews : 0;
+
+  if (failedRuns.length > 0) {
+    const top = failedRuns[0];
+    const reason = top?.error || top?.stderr || top?.statusText || "";
+    insights.push({
+      severity: "high",
+      title: "Live execution weak point",
+      evidence: `${top?.command || top?.url || "Command failure detected"}${reason ? ` | ${reason}` : ""}`,
+      suggestion: "Fix this failing command first, then rerun Live Try to validate integration stability.",
+    });
+  }
+
+  if (failRate >= 0.4) {
+    insights.push({
+      severity: "high",
+      title: "Low live pass rate",
+      evidence: `${stats.livePass}/${stats.liveRuns} live runs passed`,
+      suggestion: "Add verification command per step and run it before moving to the next step.",
+    });
+  }
+
+  if (reviewFailureRate >= 0.35) {
+    insights.push({
+      severity: "medium",
+      title: "Review rejection risk",
+      evidence: `${stats.wrong}/${stats.reviews} reviews marked wrong`,
+      suggestion: "Submit step-specific proof with exact file path, command output, and expected result match.",
+    });
+  }
+
+  if (reviewPartialRate >= 0.4) {
+    insights.push({
+      severity: "medium",
+      title: "Validation quality is partial-heavy",
+      evidence: `${stats.partial}/${stats.reviews} reviews are partial`,
+      suggestion: "Strengthen proof completeness: code snippet + run output + why-change note for each step.",
+    });
+  }
+
+  if (projectState.risk >= 70) {
+    insights.push({
+      severity: "high",
+      title: "Project risk is elevated",
+      evidence: `Risk metric ${Math.round(projectState.risk)}%`,
+      suggestion: "Prioritize risky tasks in DOING with smaller, testable increments to reduce rollback impact.",
+    });
+  }
+
+  if (projectState.complexity >= 70) {
+    insights.push({
+      severity: "medium",
+      title: "Complexity trending high",
+      evidence: `Complexity metric ${Math.round(projectState.complexity)}%`,
+      suggestion: "Split broad tasks into atomic steps and validate each one with live commands.",
+    });
+  }
+
+  if (projectState.teamLoad >= 75 && board.todo.length > 0) {
+    insights.push({
+      severity: "medium",
+      title: "Execution load concentration",
+      evidence: `${board.todo.length} tasks pending with team load ${Math.round(projectState.teamLoad)}%`,
+      suggestion: "Clear one blocking TODO end-to-end before starting new parallel tasks.",
+    });
+  }
+
+  if (prediction.successProbability < 55 && board.steps.length > 0) {
+    insights.push({
+      severity: "high",
+      title: "Delivery confidence is weak",
+      evidence: `Success probability ${prediction.successProbability}%`,
+      suggestion: "Stabilize failing review/live signals first, then continue with feature expansion.",
+    });
+  }
+
+  if (reviewDiagnostics.lowContextCount > 0) {
+    insights.push({
+      severity: "medium",
+      title: "Step-context mismatch in reviews",
+      evidence: `${reviewDiagnostics.lowContextCount} recent review(s) had weak context overlap`,
+      suggestion: "Align submission with the exact step path, command, and expected result before submit.",
+    });
+  }
+
+  if (reviewDiagnostics.missingLiveCount > 0) {
+    insights.push({
+      severity: "high",
+      title: "Live verification missing",
+      evidence: `${reviewDiagnostics.missingLiveCount} recent review(s) required live proof`,
+      suggestion: "Run Live Try for that step and include execution output in proof.",
+    });
+  }
+
+  if (reviewDiagnostics.fixSuggestions.length > 0) {
+    const topFix = reviewDiagnostics.fixSuggestions[0];
+    insights.push({
+      severity: "medium",
+      title: "Backend review fix hint",
+      evidence: topFix,
+      suggestion: "Apply this fix hint on current step, then resubmit proof for deterministic pass.",
+    });
+  }
+
+  if (reviewDiagnostics.autoCheckFailureCount > 0) {
+    insights.push({
+      severity: "high",
+      title: "Auto-check failures detected",
+      evidence: `${reviewDiagnostics.autoCheckFailureCount} recent review event(s) include failed auto checks`,
+      suggestion: "Resolve failing lint/test/build checks before marking task done.",
+    });
+  }
+
+  return insights;
+}
+
 export default function VisualizationPanel() {
   const [projectState, setProjectState] = useState(initialProjectState);
   const [selectedSuggestion, setSelectedSuggestion] = useState(null);
@@ -82,6 +204,7 @@ export default function VisualizationPanel() {
     doing: null,
     done: [],
   });
+  const [recentReviews, setRecentReviews] = useState([]);
 
   const pushHistory = useCallback((eventType, nextState, quality) => {
     const predicted = predictProjectOutcome(nextState);
@@ -137,6 +260,18 @@ export default function VisualizationPanel() {
         pushHistory("review", next, quality);
         return next;
       });
+      setRecentReviews((prev) => [
+        ...prev.slice(-9),
+        {
+          status,
+          fix: String(event.fix || "").trim(),
+          checks: event.checks || null,
+          autoChecks: event.autoChecks || null,
+          repo: event.repo || null,
+          feedback: String(event.feedback || "").trim(),
+          at: Date.now(),
+        },
+      ]);
     }
 
     if (event.type === "LIVE_TRY_RESULT") {
@@ -176,6 +311,7 @@ export default function VisualizationPanel() {
         liveRuns: 0,
         livePass: 0,
       });
+      setRecentReviews([]);
     }
   }, [activeView, pushHistory]);
 
@@ -192,6 +328,40 @@ export default function VisualizationPanel() {
     [lastLiveRun.results, lastLiveRun.task]
   );
   const livePassRate = stats.liveRuns ? Math.round((stats.livePass / stats.liveRuns) * 100) : 0;
+  const reviewDiagnostics = useMemo(() => {
+    const lowContextCount = recentReviews.filter((entry) => {
+      const score = Number(entry?.checks?.context?.score || 0);
+      return score > 0 && score < 3;
+    }).length;
+    const missingLiveCount = recentReviews.filter((entry) => {
+      const requiresLive = Boolean(entry?.checks?.requiresLive);
+      const hasLiveAttempt = Boolean(entry?.checks?.hasLiveAttempt);
+      const livePass = Boolean(entry?.checks?.livePass);
+      return requiresLive && (!hasLiveAttempt || !livePass);
+    }).length;
+    const fixSuggestions = recentReviews
+      .map((entry) => entry.fix)
+      .filter(Boolean)
+      .slice(-3)
+      .reverse();
+    const autoCheckFailureCount = recentReviews.filter((entry) => {
+      const failed = Number(entry?.autoChecks?.failed || 0);
+      return failed > 0;
+    }).length;
+
+    return { lowContextCount, missingLiveCount, fixSuggestions, autoCheckFailureCount };
+  }, [recentReviews]);
+  const optimizationInsights = useMemo(
+    () => buildOptimizationInsights({
+      projectState,
+      stats,
+      board,
+      lastLiveRun,
+      prediction,
+      reviewDiagnostics,
+    }),
+    [projectState, stats, board, lastLiveRun, prediction, reviewDiagnostics]
+  );
 
   const renderView = () => {
     if (activeView === "kanban") {
@@ -273,6 +443,12 @@ export default function VisualizationPanel() {
           >
             Trend
           </button>
+          <button
+            className={activeAddon === "optimize" ? "addon-tab active" : "addon-tab"}
+            onClick={() => setActiveAddon("optimize")}
+          >
+            Optimize
+          </button>
         </div>
 
         <div className="addon-stage">
@@ -341,6 +517,25 @@ export default function VisualizationPanel() {
               <p className="sla-note">
                 Events tracked: {history.length} | Reviews: {stats.reviews} | Live runs: {stats.liveRuns}
               </p>
+            </div>
+          )}
+
+          {activeAddon === "optimize" && (
+            <div className="addon-card">
+              <h4>Optimization Layer</h4>
+              {optimizationInsights.length ? (
+                <div className="opt-list">
+                  {optimizationInsights.map((item, index) => (
+                    <div key={`${item.title}-${index}`} className={`opt-item ${item.severity}`}>
+                      <strong>{item.title}</strong>
+                      <p>{item.evidence}</p>
+                      <span>{item.suggestion}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="sla-note">No critical weak points detected from current execution evidence.</p>
+              )}
             </div>
           )}
         </div>

@@ -20,16 +20,17 @@ export default function Board() {
   const [brief, setBrief] = useState(null);
   const [briefTask, setBriefTask] = useState(null);
   const [briefLoading, setBriefLoading] = useState(false);
+  const [briefError, setBriefError] = useState("");
   const [guideOpen, setGuideOpen] = useState(false);
   const [guide, setGuide] = useState(null);
   const [code, setCode] = useState("");
   const [review, setReview] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const [autoCheckRunning, setAutoCheckRunning] = useState(false);
   const [confirmDoneOpen, setConfirmDoneOpen] = useState(false);
   const [pendingDoneTask, setPendingDoneTask] = useState(null);
   const [liveOpen, setLiveOpen] = useState(false);
   const [liveRunning, setLiveRunning] = useState(false);
-  const [liveResultOpen, setLiveResultOpen] = useState(false);
   const [liveResult, setLiveResult] = useState(null);
   const [validatedStepKeys, setValidatedStepKeys] = useState([]);
 
@@ -107,22 +108,11 @@ export default function Board() {
     return { ok: true, reason: "" };
   };
 
-  const hasRenderablePreview = (inputGuide) => {
-    const candidate =
-      inputGuide?.previewHtml ||
-      inputGuide?.preview_html ||
-      inputGuide?.html ||
-      inputGuide?.template ||
-      inputGuide?.code ||
-      "";
-
-    return /<html|<!doctype|<body|<div|<main/i.test(String(candidate));
-  };
-
   const fetchBrief = async (task) => {
     setBriefTask(task);
     setBriefLoading(true);
     setBrief(null);
+    setBriefError("");
 
     try {
       const res = await fetch(`${API}/task-brief`, {
@@ -130,7 +120,18 @@ export default function Board() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ idea, task }),
       });
+      if (!res.ok) {
+        let message = `Task brief failed (${res.status})`;
+        try {
+          const data = await res.json();
+          message = data?.error || message;
+        } catch {
+        }
+        throw new Error(message);
+      }
       setBrief(await res.json());
+    } catch (err) {
+      setBriefError(err?.message || "Unable to load task brief.");
     } finally {
       setBriefLoading(false);
     }
@@ -142,6 +143,15 @@ export default function Board() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ idea, task }),
     });
+    if (!res.ok) {
+      let message = `Task guide failed (${res.status})`;
+      try {
+        const data = await res.json();
+        message = data?.error || message;
+      } catch {
+      }
+      throw new Error(message);
+    }
     setReview(null);
     setCode("");
     setGuide(await res.json());
@@ -160,7 +170,13 @@ export default function Board() {
       done,
     });
 
-    await loadGuide(briefTask);
+    try {
+      await loadGuide(briefTask);
+    } catch (err) {
+      setReview({ status: "wrong", feedback: err?.message || "Unable to start this task." });
+      setDoing(null);
+      setGuideOpen(false);
+    }
   };
 
   const nextStep = async () => {
@@ -171,7 +187,11 @@ export default function Board() {
       });
       return;
     }
-    await loadGuide(doing);
+    try {
+      await loadGuide(doing);
+    } catch (err) {
+      setReview({ status: "wrong", feedback: err?.message || "Unable to load next step." });
+    }
   };
 
   const submitReview = async () => {
@@ -201,6 +221,12 @@ export default function Board() {
       const data = await res.json();
       const feedbackParts = [data?.feedback || "Review unavailable"];
       if (data?.fix) feedbackParts.push(`Fix: ${data.fix}`);
+      if (data?.autoChecks?.summary) feedbackParts.push(`Auto Checks: ${data.autoChecks.summary}`);
+      if (data?.repo?.targetFile) {
+        feedbackParts.push(
+          `Repo: ${data.repo.targetFile} | exists=${data.repo.targetFileExists ? "yes" : "no"} | touched=${data.repo.fileTouchedInGit ? "yes" : "no"}`
+        );
+      }
 
       setReview({
         status: data?.status || "wrong",
@@ -214,6 +240,11 @@ export default function Board() {
         step: guide?.step_title || "",
         status: data?.status || "wrong",
         evidence: data?.evidence || null,
+        checks: data?.checks || null,
+        autoChecks: data?.autoChecks || null,
+        repo: data?.repo || null,
+        fix: data?.fix || "",
+        feedback: data?.feedback || "",
       });
 
       if ((data?.status || "").toLowerCase() === "correct" && !validatedStepKeys.includes(currentStepKey)) {
@@ -230,6 +261,37 @@ export default function Board() {
       setReview({ status: "wrong", feedback: err?.message || "Submit failed" });
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const runAutoChecksNow = async () => {
+    if (!doing || autoCheckRunning) return;
+    setAutoCheckRunning(true);
+    try {
+      const res = await fetch(`${API}/auto-checks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          idea,
+          task: doing,
+          stepContext: guide || null,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error || `Auto checks failed (${res.status})`);
+      }
+      setReview((prev) => ({
+        status: data?.ok ? "partial" : (prev?.status || "wrong"),
+        feedback: [prev?.feedback || "", `Auto Checks: ${data?.autoChecks?.summary || "completed"}`].filter(Boolean).join("\n"),
+      }));
+    } catch (err) {
+      setReview((prev) => ({
+        status: prev?.status || "wrong",
+        feedback: [prev?.feedback || "", `Auto Checks Error: ${err?.message || "failed"}`].filter(Boolean).join("\n"),
+      }));
+    } finally {
+      setAutoCheckRunning(false);
     }
   };
 
@@ -261,7 +323,6 @@ export default function Board() {
         results: [],
         error: "Live command is missing for this step. Backend task-guide must return `live_try_commands`."
       });
-      setLiveResultOpen(true);
       dispatchAction({
         type: "LIVE_TRY_RESULT",
         idea,
@@ -290,7 +351,6 @@ export default function Board() {
 
       const data = await res.json();
       setLiveResult(data);
-      setLiveResultOpen(true);
       dispatchAction({
         type: "LIVE_TRY_RESULT",
         idea,
@@ -306,7 +366,6 @@ export default function Board() {
         results: [],
         error: err?.message || "Live try failed"
       });
-      setLiveResultOpen(true);
       dispatchAction({
         type: "LIVE_TRY_RESULT",
         idea,
@@ -322,9 +381,7 @@ export default function Board() {
   };
 
   const handleLiveTry = async () => {
-    if (hasRenderablePreview(guide)) {
-      setLiveOpen(true);
-    }
+    setLiveOpen(true);
     await runLiveTry();
   };
 
@@ -398,6 +455,11 @@ export default function Board() {
             </div>
           )}
           {briefLoading && <div className="brief-panel"><p>Generating...</p></div>}
+          {!briefLoading && briefError && (
+            <div className="brief-panel">
+              <p><b>Error:</b> {briefError}</p>
+            </div>
+          )}
         </div>
       </div>
 
@@ -473,6 +535,9 @@ export default function Board() {
               <button className="action-live" onClick={handleLiveTry} disabled={liveRunning}>
                 {liveRunning ? "Running..." : "Live Try"}
               </button>
+              <button className="action-submit" onClick={runAutoChecksNow} disabled={autoCheckRunning}>
+                {autoCheckRunning ? "Checking..." : "Auto Check"}
+              </button>
               <button className="action-done" onClick={openMarkDoneConfirm} disabled={!isReviewAccepted}>
                 Mark Done
               </button>
@@ -482,7 +547,17 @@ export default function Board() {
         </div>
       )}
 
-      {liveOpen && guide && <LivePreview guide={guide} onClose={() => setLiveOpen(false)} />}
+      {liveOpen && guide && (
+        <LivePreview
+          guide={guide}
+          onClose={() => setLiveOpen(false)}
+          liveRunning={liveRunning}
+          liveResult={liveResult}
+          steps={steps}
+          done={done}
+          doing={doing}
+        />
+      )}
 
       {confirmDoneOpen && (
         <div className="confirm-overlay">
@@ -496,19 +571,6 @@ export default function Board() {
         </div>
       )}
 
-      {liveResultOpen && (
-        <div className="api-result-overlay">
-          <div className="api-result-modal">
-            <div className="api-result-header">
-              <h4>Live Try Result {liveResult?.ok ? "(Pass)" : "(Needs Fix)"}</h4>
-              <button onClick={() => setLiveResultOpen(false)}>Close</button>
-            </div>
-            <div className="api-result-body">
-              <pre>{JSON.stringify(liveResult, null, 2)}</pre>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
