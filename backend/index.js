@@ -7,14 +7,20 @@ import { promisify } from "util";
 import fs from "fs";
 import path from "path";
 import mongoose from "mongoose";
+import { fileURLToPath } from "url";
 
 dotenv.config();
 
 const app = express();
 const PORT = Number(process.env.PORT) || 5001;
+const currentFilePath = fileURLToPath(import.meta.url);
+const isDirectRun = Boolean(process.argv[1]) && path.resolve(process.argv[1]) === currentFilePath;
 const execAsync = promisify(exec);
 const LIVE_WORKSPACE_ROOT = process.env.LIVE_WORKSPACE_ROOT || path.resolve(process.cwd(), "..");
+const FRONTEND_BUILD_DIR = path.resolve(process.cwd(), "frontend", "build");
+const FRONTEND_INDEX_PATH = path.join(FRONTEND_BUILD_DIR, "index.html");
 const MONGO_URI = process.env.MONGO_URI || "";
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const MAX_COMMAND_LENGTH = 300;
 const SHELL_META_PATTERN = /[|&;<>()`$]/;
 const BLOCKED_COMMAND_PATTERN = /\b(rm|rmdir|del|format|shutdown|reboot|mkfs|dd|chmod|chown|sudo|powershell|pwsh|cmd|bash|zsh|fish|scp|ssh)\b/i;
@@ -32,6 +38,8 @@ const ALLOWED_COMMAND_PREFIXES = [
   "cargo test",
   "curl ",
   "echo ",
+  "mkdir ",
+  "touch ",
   "git status",
   "git diff",
   "ls",
@@ -44,6 +52,10 @@ const ALLOWED_COMMAND_PREFIXES = [
 app.use(cors());
 app.use(express.json({ limit: "4mb" }));
 
+if (fs.existsSync(FRONTEND_BUILD_DIR)) {
+app.use(express.static(FRONTEND_BUILD_DIR));
+}
+
 /* ===================== HEALTH ===================== */
 
 app.get("/health", (_req, res) => {
@@ -51,15 +63,10 @@ res.json({
 ok: true,
 service: "phantasia-backend",
 persistence: mongoEnabled ? "mongodb" : "memory",
+aiConfigured: Boolean(OPENAI_API_KEY),
 });
 });
-
-if (!process.env.OPENAI_API_KEY) {
-console.error("OPENAI_API_KEY missing in .env");
-process.exit(1);
-}
-
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
 
 /* ===================== PERSISTENT STORE ===================== */
 
@@ -111,6 +118,9 @@ setTimeout(() => reject(new Error("AI timeout")), ms)
 ]);
 
 async function jsonCompletion(messages, temperature = 0.2) {
+if (!openai) {
+throw new Error("OPENAI_API_KEY is not configured on the server.");
+}
 let lastErr;
 for (const model of MODELS) {
 try {
@@ -396,7 +406,260 @@ const value = String(rawPath || "")
 if (!value || value === ".") return "";
 if (value.includes("..")) return "";
 if (path.isAbsolute(value)) return "";
-return value;
+  return value;
+}
+
+function writeFileFromEcho(command = "", session) {
+  const match = command.match(/^echo\s+(["'`])([\s\S]+?)\1\s*>\s*([^\s]+)$/i);
+  if (!match) return null;
+  const [, , payload, targetRaw] = match;
+  const target = sanitizeRelativePath(targetRaw);
+  if (!target) {
+    return {
+      type: "shell",
+      command,
+      ok: false,
+      code: 1,
+      cwd: session.cwd,
+      stdout: "",
+      stderr: "Invalid target path for echo redirect.",
+      error: "Invalid target path."
+    };
+  }
+  const absolute = path.resolve(session.cwd, target);
+  if (!isInsideWorkspace(absolute)) {
+    return {
+      type: "shell",
+      command,
+      ok: false,
+      code: 1,
+      cwd: session.cwd,
+      stdout: "",
+      stderr: "Target path outside workspace.",
+      error: "Invalid target path."
+    };
+  }
+  try {
+    if (/[&|;]/.test(payload)) {
+      return {
+        type: "shell",
+        command,
+        ok: false,
+        code: 1,
+        cwd: session.cwd,
+        stdout: "",
+        stderr: "Payload contains illegal characters.",
+        error: "Payload rejected."
+      };
+    }
+    fs.mkdirSync(path.dirname(absolute), { recursive: true });
+    fs.writeFileSync(absolute, payload + "\n", "utf-8");
+    return {
+      type: "shell",
+      command,
+      ok: true,
+      code: 0,
+      cwd: session.cwd,
+      stdout: `Wrote ${target}`,
+      stderr: ""
+    };
+  } catch (err) {
+    return {
+      type: "shell",
+      command,
+      ok: false,
+      code: err?.code || 1,
+      cwd: session.cwd,
+      stdout: "",
+      stderr: err?.message || "Failed to write file from echo.",
+      error: err?.message || "Write failed"
+    };
+  }
+}
+
+function splitCommandArgs(command = "") {
+  if (!command || typeof command !== "string") return [];
+  const args = [];
+  let buffer = "";
+  let quote = null;
+  let escape = false;
+
+  const pushBuffer = () => {
+    if (buffer) args.push(buffer);
+    buffer = "";
+  };
+
+  for (let i = 0; i < command.length; i += 1) {
+    const char = command[i];
+    if (escape) {
+      buffer += char;
+      escape = false;
+      continue;
+    }
+    if (char === "\\") {
+      escape = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) {
+        quote = null;
+      } else {
+        buffer += char;
+      }
+      continue;
+    }
+    if (char === "'" || char === '"' || char === "`") {
+      quote = char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      pushBuffer();
+      continue;
+    }
+    buffer += char;
+  }
+
+  pushBuffer();
+  return args;
+}
+
+function resolvePortableTarget(session, rawTarget) {
+  const normalized = sanitizeRelativePath(rawTarget);
+  if (!normalized) return null;
+  const absolute = path.resolve(session.cwd, normalized);
+  if (!isInsideWorkspace(absolute)) return null;
+  return { normalized, absolute };
+}
+
+function runPortableMkdir(command = "", session) {
+  const parts = splitCommandArgs(command);
+  if (!parts.length || parts[0].toLowerCase() !== "mkdir") return null;
+
+  const targets = parts.slice(1).filter((part) => part && part !== "-p");
+  if (!targets.length) {
+    return {
+      type: "shell",
+      command,
+      ok: false,
+      code: 1,
+      cwd: session.cwd,
+      stdout: "",
+      stderr: "mkdir target missing.",
+      error: "mkdir target missing."
+    };
+  }
+
+  try {
+    const created = [];
+    for (const rawTarget of targets) {
+      const target = resolvePortableTarget(session, rawTarget);
+      if (!target) {
+        return {
+          type: "shell",
+          command,
+          ok: false,
+          code: 1,
+          cwd: session.cwd,
+          stdout: "",
+          stderr: `Invalid directory path: ${rawTarget}`,
+          error: "Invalid directory path."
+        };
+      }
+      fs.mkdirSync(target.absolute, { recursive: true });
+      created.push(target.normalized);
+    }
+
+    return {
+      type: "shell",
+      command,
+      ok: true,
+      code: 0,
+      cwd: session.cwd,
+      stdout: `Directory ready: ${created.join(", ")}`,
+      stderr: ""
+    };
+  } catch (err) {
+    return {
+      type: "shell",
+      command,
+      ok: false,
+      code: err?.code || 1,
+      cwd: session.cwd,
+      stdout: "",
+      stderr: err?.message || "mkdir failed.",
+      error: err?.message || "mkdir failed."
+    };
+  }
+}
+
+function runPortableTouch(command = "", session) {
+  const parts = splitCommandArgs(command);
+  if (!parts.length || parts[0].toLowerCase() !== "touch") return null;
+
+  const targets = parts.slice(1).filter(Boolean);
+  if (!targets.length) {
+    return {
+      type: "shell",
+      command,
+      ok: false,
+      code: 1,
+      cwd: session.cwd,
+      stdout: "",
+      stderr: "touch target missing.",
+      error: "touch target missing."
+    };
+  }
+
+  try {
+    const touched = [];
+    const now = new Date();
+    for (const rawTarget of targets) {
+      const target = resolvePortableTarget(session, rawTarget);
+      if (!target) {
+        return {
+          type: "shell",
+          command,
+          ok: false,
+          code: 1,
+          cwd: session.cwd,
+          stdout: "",
+          stderr: `Invalid file path: ${rawTarget}`,
+          error: "Invalid file path."
+        };
+      }
+      fs.mkdirSync(path.dirname(target.absolute), { recursive: true });
+      if (!fs.existsSync(target.absolute)) {
+        fs.writeFileSync(target.absolute, "", "utf-8");
+      }
+      fs.utimesSync(target.absolute, now, now);
+      touched.push(target.normalized);
+    }
+
+    return {
+      type: "shell",
+      command,
+      ok: true,
+      code: 0,
+      cwd: session.cwd,
+      stdout: `File ready: ${touched.join(", ")}`,
+      stderr: ""
+    };
+  } catch (err) {
+    return {
+      type: "shell",
+      command,
+      ok: false,
+      code: err?.code || 1,
+      cwd: session.cwd,
+      stdout: "",
+      stderr: err?.message || "touch failed.",
+      error: err?.message || "touch failed."
+    };
+  }
+}
+
+function runPortableFilesystemCommand(command = "", session) {
+  return runPortableMkdir(command, session) || runPortableTouch(command, session);
 }
 
 function inferWhereToDoFromCommands(commands = []) {
@@ -483,6 +746,7 @@ return pieces.join("\n\n");
 /* ===================== LIVE TRY HELPERS ===================== */
 
 const LIVE_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
+const ALLOWED_LIVE_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 
 const getSession = (idea, task) => {
 const sessionKey = key(idea || "global", task || "global");
@@ -497,6 +761,15 @@ const root = path.resolve(LIVE_WORKSPACE_ROOT);
 const candidate = path.resolve(targetPath);
 const relative = path.relative(root, candidate);
 return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function isAllowedLiveUrl(rawUrl = "") {
+try {
+  const parsed = new URL(String(rawUrl || "").trim());
+  return ALLOWED_LIVE_HOSTS.has(parsed.hostname) || parsed.hostname.endsWith(".localhost");
+} catch {
+  return false;
+}
 }
 
 function isAllowedShellCommand(raw = "") {
@@ -551,6 +824,11 @@ async function runShellCommand(rawCommand, session) {
 const command = String(rawCommand || "").trim();
 if (!command) {
 return { type: "shell", command, ok: false, error: "Empty command", cwd: session.cwd };
+}
+
+const portableResult = runPortableFilesystemCommand(command, session);
+if (portableResult) {
+return portableResult;
 }
 
 if (!isAllowedShellCommand(command)) {
@@ -670,16 +948,67 @@ if (key) headers[key] = value;
 }
 }
 
-const dataMatch = text.match(/(?:--data|-d)\s+(?:"([^"]*)"|'([^']*)'|([^\s]+))/i);
-if (dataMatch) {
-body = dataMatch[1] || dataMatch[2] || dataMatch[3] || "";
-if (!text.match(/-X\s+/i)) {
-method = "POST";
-}
-}
+  const dataMatch = text.match(/(?:--data|-d)\s+(?:"([^"]*)"|'([^']*)'|([^\s]+))/i);
+  if (dataMatch) {
+    body = dataMatch[1] || dataMatch[2] || dataMatch[3] || "";
+    if (!text.match(/-X\s+/i)) {
+      method = "POST";
+    }
+  }
 
 if (!LIVE_METHODS.has(method)) method = "GET";
 return { method, url, headers, body };
+}
+
+function splitShellCommands(command = "") {
+  if (!command || typeof command !== "string") return [];
+  const segments = [];
+  let buffer = "";
+  let quote = null;
+  let escape = false;
+
+  const pushSegment = () => {
+    const trimmed = buffer.trim();
+    if (trimmed) segments.push(trimmed);
+    buffer = "";
+  };
+
+  for (let i = 0; i < command.length; i += 1) {
+    const char = command[i];
+    if (escape) {
+      buffer += char;
+      escape = false;
+      continue;
+    }
+    if (char === "\\") {
+      escape = true;
+      buffer += char;
+      continue;
+    }
+    if (quote) {
+      buffer += char;
+      if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (char === "'" || char === '"' || char === "`") {
+      quote = char;
+      buffer += char;
+      continue;
+    }
+    if (char === ";" || (char === "&" && command[i + 1] === "&") || (char === "|" && command[i + 1] === "|")) {
+      pushSegment();
+      if ((char === "&" || char === "|") && command[i + 1] === char) {
+        i += 1;
+      }
+      continue;
+    }
+    buffer += char;
+  }
+
+  pushSegment();
+  return segments;
 }
 
 /* ===================== REPO-AWARE CHECKS ===================== */
@@ -874,6 +1203,9 @@ Rules:
 app.post("/task-brief", async (req, res) => {
 try {
 const { idea, task } = req.body;
+if (!idea || !task) {
+return res.status(400).json({ error: "idea and task are required." });
+}
 
 const completion = await jsonCompletion([
   {
@@ -904,6 +1236,9 @@ res.status(500).json({ error: err.message });
 app.post("/task-guide", async (req, res) => {
 try {
 const { idea, task } = req.body;
+if (!idea || !task) {
+return res.status(400).json({ error: "idea and task are required." });
+}
 
 const session = await getSessionContextAsync(idea, task);
 const history = session.history;
@@ -967,6 +1302,9 @@ Rules:
 app.post("/task-chat", async (req, res) => {
 try {
 const { idea, task, message, currentStep, userCode } = req.body;
+if (!idea || !task || !message) {
+return res.status(400).json({ error: "idea, task, and message are required." });
+}
 const session = await getSessionContextAsync(idea, task);
 const history = session.history;
 const stepContext = currentStep || history[history.length - 1] || {};
@@ -1146,6 +1484,9 @@ const workflowCommand = latestStep?.live_try_commands?.[0] || latestStep?.comman
 const allCommands = Array.isArray(commands) && commands.length
 ? commands.filter(Boolean)
 : [command || workflowCommand || ""].filter(Boolean);
+if (!allCommands.length) {
+return res.status(400).json({ error: "At least one command or URL is required for live try." });
+}
 const session = getSession(idea, task);
 const desiredDir = resolveWorkspaceDir(whereToDo || latestStep?.where_to_do || "");
 if (desiredDir) {
@@ -1160,6 +1501,21 @@ const finalMethod = String(method || parsed.method || "GET").toUpperCase();
 const looksLikeHttp = Boolean(finalUrl && /^https?:\/\//i.test(finalUrl));
 
 if (looksLikeHttp) {
+if (!isAllowedLiveUrl(finalUrl)) {
+results.push({
+type: "http",
+command: item,
+ok: false,
+status: 0,
+statusText: "Blocked host",
+url: finalUrl,
+method: finalMethod,
+body: "",
+error: "Live Try only allows localhost URLs."
+});
+continue;
+}
+
 if (!LIVE_METHODS.has(finalMethod)) {
 results.push({
 type: "http",
@@ -1226,8 +1582,16 @@ error: err.message
 continue;
 }
 
-const shellResult = await runShellCommand(item, session);
-results.push(shellResult);
+    const shellCommands = splitShellCommands(item);
+    for (const safeCommand of shellCommands) {
+      const redirected = writeFileFromEcho(safeCommand, session);
+      if (redirected) {
+        results.push(redirected);
+        continue;
+      }
+      const shellResult = await runShellCommand(safeCommand, session);
+      results.push(shellResult);
+    }
 }
 
 const ok = results.every((r) => r.ok);
@@ -1332,7 +1696,23 @@ if (mongoEnabled) {
 res.json({ ok: true });
 });
 
-initPersistentStore().finally(() => {
+app.get("/{*path}", (req, res, next) => {
+if (!fs.existsSync(FRONTEND_INDEX_PATH)) {
+  return next();
+}
+if (req.path.startsWith("/api/")) {
+  return next();
+}
+return res.sendFile(FRONTEND_INDEX_PATH);
+});
+
+const storeInitPromise = initPersistentStore();
+
+if (isDirectRun) {
+storeInitPromise.finally(() => {
 app.listen(PORT, () => console.log("Phantasia backend running on " + PORT));
 });
+}
+
+export default app;
 

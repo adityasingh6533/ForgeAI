@@ -20,7 +20,9 @@ yarn-error.log*
 # OS/editor
 .DS_Store
 Thumbs.db
+.vercel/
 
 # Accidental recursive project copies (long path issues)
 civic_service_platform/
 civic_service_frontend/
+.vercel

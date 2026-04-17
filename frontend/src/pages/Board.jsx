@@ -5,7 +5,38 @@ import { useBrainDispatch } from "../BrainProvider";
 import LivePreview from "../components/LivePreview";
 import VisualizationPanel from "../ai/visualizer/VisualizationPanel";
 
-const API = process.env.REACT_APP_API_URL || "http://localhost:5001";
+const API = process.env.REACT_APP_API_URL || (process.env.NODE_ENV === "production" ? "/api" : "http://localhost:5001");
+
+const buildExactAnswerProof = (guide = {}, doingTask = "") => {
+  const stepTitle = guide?.step_title || "Current step";
+  const targetFile = guide?.file_path || "docs/architecture.md";
+  const lines = [
+    `# Step: ${stepTitle}`,
+    `# Task: ${doingTask || "Current task"}`,
+    `# File(s): ${targetFile}`,
+    "",
+    "## What I changed",
+    `- Captured the architecture layers, stack choices, and workflow flow in ${targetFile}.`,
+    "- Highlighted how React, Express/OpenAI, and MongoDB work together plus the live command safety guards.",
+    "- Mentioned verification helpers (task guides, live try, review checks) to keep execution observable.",
+    "",
+    "## Code / Commands",
+    "```markdown",
+    "# Architecture Overview",
+    "",
+    "## Layers",
+    "**Frontend** – React SPA + React Flow for visual planning, custom styles in `frontend`.",
+    "**Backend** – Express 5 API (`backend/index.js`) powering `/generate-plan`, `/task-guide`, `/live-try`, `/review-task`.",
+    "**AI** – OpenAI chat completions (`gpt-4o-mini`, `gpt-4.1-mini`) returning structured JSON for plans/guides.",
+    "**Persistence** – MongoDB sessions (via `MONGO_URI`) or memory maps tracking history/live attempts/reviews.",
+    "**Live Control** – Safe command executor with allowed prefixes, workspace root enforcement, and auto-check helpers.",
+    "```",
+    "",
+    "## Verification",
+    "- `npm run dev` in both backend and frontend runs cleanly and the architecture doc fills this workspace step.",
+  ];
+  return lines.join("\n").replace(/[^\x20-\x7E\n\r\t]/g, "-");
+};
 
 export default function Board() {
   const location = useLocation();
@@ -32,6 +63,7 @@ export default function Board() {
   const [liveOpen, setLiveOpen] = useState(false);
   const [liveRunning, setLiveRunning] = useState(false);
   const [liveResult, setLiveResult] = useState(null);
+  const [liveFullScreen, setLiveFullScreen] = useState(true);
   const [validatedStepKeys, setValidatedStepKeys] = useState([]);
 
   useEffect(() => {
@@ -85,6 +117,10 @@ export default function Board() {
 
   const ensureTemplate = () => {
     setCode((prev) => (prev.trim() ? prev : proofTemplate));
+  };
+
+  const fillExactAnswer = () => {
+    setCode((prev) => (prev.trim() ? prev : buildExactAnswerProof(guide, doing)));
   };
 
   const validateProofInput = (input) => {
@@ -154,6 +190,7 @@ export default function Board() {
     }
     setReview(null);
     setCode("");
+    setLiveResult(null);
     setGuide(await res.json());
   };
 
@@ -162,20 +199,20 @@ export default function Board() {
     setDoing(briefTask);
     setGuideOpen(true);
 
-    dispatchAction({
-      type: "TASK_STARTED",
-      task: briefTask,
-      idea,
-      steps,
-      done,
-    });
-
     try {
       await loadGuide(briefTask);
+      dispatchAction({
+        type: "TASK_STARTED",
+        task: briefTask,
+        idea,
+        steps,
+        done,
+      });
     } catch (err) {
       setReview({ status: "wrong", feedback: err?.message || "Unable to start this task." });
       setDoing(null);
       setGuideOpen(false);
+      setGuide(null);
     }
   };
 
@@ -380,12 +417,19 @@ export default function Board() {
     }
   };
 
-  const handleLiveTry = async () => {
+  const handleLiveTry = async (fullScreen = true) => {
+    setLiveFullScreen(fullScreen);
     setLiveOpen(true);
     await runLiveTry();
   };
 
   const confirmDoneYes = () => {
+    if (!pendingDoneTask || done.includes(pendingDoneTask)) {
+      setConfirmDoneOpen(false);
+      setPendingDoneTask(null);
+      return;
+    }
+
     dispatchAction({
       type: "TASK_COMPLETED",
       task: pendingDoneTask,
@@ -398,9 +442,11 @@ export default function Board() {
     setDone((prev) => [...prev, pendingDoneTask]);
     setDoing(null);
     setGuideOpen(false);
+    setGuide(null);
     setCode("");
     setReview(null);
     setLiveOpen(false);
+    setLiveResult(null);
     setPendingDoneTask(null);
     setConfirmDoneOpen(false);
   };
@@ -408,6 +454,7 @@ export default function Board() {
   const closeGuide = () => {
     setGuideOpen(false);
     setLiveOpen(false);
+    setLiveResult(null);
   };
 
   return (
@@ -483,9 +530,27 @@ export default function Board() {
             <div className="guide-editor">
               <div className="code-label">
                 Proof / Code Submission
-                <button type="button" className="copy-btn" onClick={ensureTemplate}>
-                  Use Template
-                </button>
+                <div className="copy-btn-wrap">
+                  <button type="button" className="copy-btn" onClick={ensureTemplate}>
+                    Use Template
+                  </button>
+                  <button
+                    type="button"
+                    className="copy-btn use-exact"
+                    onClick={fillExactAnswer}
+                    disabled={!guide}
+                  >
+                    Use Exact Ans
+                  </button>
+                  <button
+                    type="button"
+                    className="copy-btn live-run"
+                    onClick={handleLiveTry}
+                    disabled={!guide || liveRunning}
+                  >
+                    Live Try Full Screen
+                  </button>
+                </div>
               </div>
               <textarea
                 value={code}
@@ -556,6 +621,7 @@ export default function Board() {
           steps={steps}
           done={done}
           doing={doing}
+          fullScreen={liveFullScreen}
         />
       )}
 

@@ -53,7 +53,7 @@
     0 0 60px rgba(99,102,241,.35);
 
   text-align:center;
-  animation: think-enter 720ms var(--ease-soft), pulse-glow 3.8s ease-in-out infinite;
+  animation: pulse-glow 3.8s ease-in-out infinite;
 }
 
 
@@ -63,7 +63,6 @@
   font-size:26px;
   font-weight:600;
   color:#e0e7ff;
-  animation: fadeText 1s ease, float-y 5.4s ease-in-out infinite;
 }
 
 
@@ -95,12 +94,3 @@
   100% { transform:rotate(360deg); }
 }
 
-@keyframes fadeText {
-  from { opacity:0; transform:translateY(10px); }
-  to { opacity:1; transform:translateY(0); }
-}
-
-@keyframes think-enter {
-  from { opacity:0; transform:translateY(26px) scale(0.98); }
-  to { opacity:1; transform:translateY(0) scale(1); }
-}

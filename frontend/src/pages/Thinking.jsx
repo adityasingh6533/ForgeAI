@@ -2,7 +2,7 @@ import "../styles/Thinking.css";
 import { useEffect, useState, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
-const API_BASE_URL = process.env.REACT_APP_API_URL || "http://localhost:5001";
+const API_BASE_URL = process.env.REACT_APP_API_URL || (process.env.NODE_ENV === "production" ? "/api" : "http://localhost:5001");
 
 const planSteps = [
   "Understanding your idea...",
@@ -42,6 +42,14 @@ export default function Thinking() {
     const controller = new AbortController();
     let isMounted = true;
 
+    const cleanup = () => {
+      isMounted = false;
+      controller.abort();
+      timeoutRefs.current.forEach((id) => clearTimeout(id));
+      timeoutRefs.current = [];
+      hasRequested.current = false;
+    };
+
     if (!idea) {
       navigate("/generate");
       return;
@@ -63,7 +71,7 @@ export default function Thinking() {
         });
       }, 1800);
       timeoutRefs.current.push(id);
-      return;
+      return cleanup;
     }
 
     const generatePlan = async () => {
@@ -104,12 +112,7 @@ export default function Thinking() {
     };
 
     generatePlan();
-    return () => {
-      isMounted = false;
-      controller.abort();
-      timeoutRefs.current.forEach((id) => clearTimeout(id));
-      timeoutRefs.current = [];
-    };
+    return cleanup;
 
   }, [idea, navigate, mode, plan]);
 

@@ -6,7 +6,6 @@ html, body, #root {
 .App {
   min-height: 100vh;
   text-align: center;
-  animation: page-enter var(--motion-base) var(--ease-soft);
 }
 
 .home,
@@ -14,5 +13,5 @@ html, body, #root {
 .thinking-page,
 .plan-page,
 .board-page {
-  animation: page-enter 620ms var(--ease-soft);
+  animation: none;
 }

@@ -1,0 +1,17 @@
+{
+  "version": 2,
+  "installCommand": "npm install --prefix frontend && npm install --prefix backend",
+  "buildCommand": "npm run build --prefix frontend",
+  "outputDirectory": "frontend/build",
+  "functions": {
+    "api/[...route].js": {
+      "includeFiles": "frontend/build/**"
+    }
+  },
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "/api/$1"
+    }
+  ]
+}
