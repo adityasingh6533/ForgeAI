@@ -1,3 +1,15 @@
+<img width="1599" height="740" alt="image" src="https://github.com/user-attachments/assets/9b525c09-4d57-44ed-8fc9-2a641f838289" />
+<img width="1600" height="713" alt="image" src="https://github.com/user-attachments/assets/6f8299de-2041-47c2-b86b-f517f2a421fb" />
+<img width="1600" height="746" alt="image" src="https://github.com/user-attachments/assets/4368a7b8-816e-4524-a81b-0423aa30b4ef" />
+<img width="1600" height="723" alt="image" src="https://github.com/user-attachments/assets/8c8bab4d-6dbd-4d61-b92e-8a7bac21c585" />
+<img width="1600" height="729" alt="image" src="https://github.com/user-attachments/assets/a527580e-3043-439f-869f-f08c3985dc3e" />
+<img width="1599" height="751" alt="image" src="https://github.com/user-attachments/assets/44c80743-19ad-40e4-806f-d2f899120516" />
+<img width="1600" height="746" alt="image" src="https://github.com/user-attachments/assets/d71adb50-46fd-4b74-8773-97a89b3c2e02" />
+
+
+
+
+
 # ForgeAI
 
 ForgeAI is a live AI execution workspace that turns ideas into build-ready plans, guided implementation steps, real execution checks, and validation feedback in one loop.
