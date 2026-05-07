@@ -36,5 +36,4 @@
   background: linear-gradient(90deg, #22d3ee, #3b82f6, #4ade80);
   transition: width var(--motion-base) var(--ease-soft);
   box-shadow: 0 0 12px rgba(56, 189, 248, 0.55);
-  animation: pulse-glow 3.5s ease-in-out infinite;
 }

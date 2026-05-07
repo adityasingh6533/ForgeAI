@@ -20,7 +20,6 @@
   background:
     radial-gradient(circle at 18% 25%, rgba(56, 189, 248, 0.22), transparent 42%),
     radial-gradient(circle at 82% 70%, rgba(99, 102, 241, 0.24), transparent 48%);
-  animation: aurora-shift 15s ease-in-out infinite;
 }
 
 .plan-container {
@@ -94,7 +93,6 @@
 }
 
 .mindmap:hover {
-  transform: translateY(-3px);
   box-shadow: 0 28px 64px rgba(2, 6, 23, 0.62);
 }
 
@@ -118,7 +116,6 @@
 }
 
 .idea-brief:hover {
-  transform: translateY(-3px);
   box-shadow: 0 24px 60px rgba(2, 6, 23, 0.56);
 }
 
@@ -151,12 +148,12 @@
   font-weight: 700;
   cursor: pointer;
   transition: transform var(--motion-fast) var(--ease-soft), opacity var(--motion-fast) ease, box-shadow var(--motion-fast) ease;
-  animation: pulse-glow 3.9s ease-in-out infinite;
 }
 
 .start-btn:hover {
-  transform: translateY(-3px) scale(1.01);
+  transform: translateY(-2px);
   opacity: 0.95;
+  box-shadow: 0 16px 38px rgba(99, 102, 241, 0.28);
 }
 
 .start-btn:active {
@@ -198,7 +195,7 @@
 }
 
 .mind-node:hover{
-  transform:translateY(-2px) scale(1.02);
+  transform:translateY(-1px);
   box-shadow:0 0 18px rgba(96, 165, 250, 0.45);
   background:linear-gradient(180deg, rgba(37, 99, 235, 0.34), rgba(30, 58, 138, 0.88));
 }

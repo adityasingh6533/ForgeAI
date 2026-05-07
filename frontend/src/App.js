@@ -5,6 +5,7 @@ import Generate from "./pages/Generate";
 import Thinking from "./pages/Thinking";
 import Plan from "./pages/Plan";
 import Board from "./pages/Board";
+import Countdown from "./pages/Countdown";
 
 function App() {
   return (
@@ -15,6 +16,7 @@ function App() {
         <Route path="/thinking" element={<Thinking />} />
         <Route path="/plan" element={<Plan />} />
         <Route path="/board" element={<Board />} />
+        <Route path="/countdown" element={<Countdown />} />
       </Routes>
     </div>
   );
