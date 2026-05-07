@@ -1,5 +1,6 @@
 
-<img width="1916" height="900" alt="image" src="https://github.com/user-attachments/assets/7fb5e80f-fb7a-4794-879b-669918598642" />
+<img width="1774" height="887" alt="ChatGPT Image May 7, 2026, 07_34_17 PM" src="https://github.com/user-attachments/assets/aee70bf6-8f2d-4d77-b096-0a6021959056" />
+
 
 # ForgeAI
 
