@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="./assets/forge-ai-readme.gif" alt="ForgeAI animated product banner" width="900" />
+</p>
+
 <img width="1599" height="740" alt="image" src="https://github.com/user-attachments/assets/9b525c09-4d57-44ed-8fc9-2a641f838289" />
 <img width="1600" height="713" alt="image" src="https://github.com/user-attachments/assets/6f8299de-2041-47c2-b86b-f517f2a421fb" />
 <img width="1600" height="729" alt="image" src="https://github.com/user-attachments/assets/a527580e-3043-439f-869f-f08c3985dc3e" />
