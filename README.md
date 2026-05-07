@@ -1,4 +1,5 @@
 
+<img width="1916" height="900" alt="image" src="https://github.com/user-attachments/assets/7fb5e80f-fb7a-4794-879b-669918598642" />
 
 # ForgeAI
 
